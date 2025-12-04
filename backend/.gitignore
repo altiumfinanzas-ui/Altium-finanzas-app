@@ -1,0 +1,28 @@
+# Entorno virtual de Python
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+
+# Next.js / Node
+node_modules/
+web/node_modules/
+web/.next/
+web/.turbo/
+web/out/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de IDE
+.vscode/
+.idea/
+
+# Otros
+*.log
+.env
+.env.*

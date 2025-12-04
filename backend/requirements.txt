@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic[email]
+python-multipart
+python-jose[cryptography]
+email-validator
+pillow
+pytesseract
+pymupdf
+
