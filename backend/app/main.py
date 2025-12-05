@@ -169,6 +169,10 @@ app.include_router(auth_router, prefix="/auth")
 @app.on_event("startup")
 def startup():
     init_db()
+    
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Altium Finanzas API funcionando"}
 
 
 # --------- Modelos de respuesta / entrada ----------
