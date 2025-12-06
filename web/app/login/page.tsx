@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE =
+  "https://altium-finanzas-app.onrender.com";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("altiumfinanzas@altiumfinanzas.com");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">("register");
   const [status, setStatus] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -15,6 +16,7 @@ export default function LoginPage() {
     setStatus("Procesando...");
 
     try {
+      console.log("Llamando a:", `${API_BASE}/auth/${mode}`);
       const res = await fetch(
         `${API_BASE}/auth/${mode === "login" ? "login" : "register"}`,
         {
@@ -24,26 +26,45 @@ export default function LoginPage() {
         }
       );
 
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        console.warn("Respuesta no JSON:", text);
+      }
 
       if (!res.ok) {
-        setStatus(data.detail || "Error al procesar la solicitud");
+        console.error("Respuesta de error:", res.status, text);
+        setStatus(
+          data.detail ||
+            `Error ${res.status}: ${
+              text || "Error al procesar la solicitud"
+            }`
+        );
         return;
       }
 
+      // Registro OK
       if (mode === "register") {
         setStatus("Usuario registrado, ahora inicia sesión.");
         setMode("login");
         return;
       }
 
-      // Login OK → guardamos token y vamos a la app principal (/)
+      // Login OK
+      if (!data.access_token) {
+        console.log("Respuesta inesperada de login:", data);
+        setStatus("Respuesta inesperada del servidor.");
+        return;
+      }
+
       localStorage.setItem("altium_token", data.access_token);
       setStatus("Login correcto, entrando a la app...");
       window.location.href = "/";
     } catch (err: any) {
       console.error("ERROR FETCH:", err);
-      setStatus("Error: " + (err?.message || "no se pudo conectar"));
+      setStatus("Error de red: " + (err?.message || "no se pudo conectar"));
     }
   };
 
@@ -73,7 +94,9 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: "12px" }}>
-            <label style={{ display: "block", marginBottom: "4px" }}>Email</label>
+            <label style={{ display: "block", marginBottom: "4px" }}>
+              Email
+            </label>
             <input
               type="email"
               value={email}
@@ -126,9 +149,7 @@ export default function LoginPage() {
 
         <button
           type="button"
-          onClick={() =>
-            setMode(mode === "login" ? "register" : "login")
-          }
+          onClick={() => setMode(mode === "login" ? "register" : "login")}
           style={{
             marginTop: "8px",
             background: "none",
