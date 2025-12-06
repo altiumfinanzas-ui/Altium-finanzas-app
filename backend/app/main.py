@@ -181,19 +181,18 @@ os.makedirs(STORAGE_PATH, exist_ok=True)
 app = FastAPI(title="Altium Finanzas API")
 
 # CORS: permitir frontend local y Vercel
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://altium-finanzas-app.vercel.app",  # frontend en producción
-]
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="Altium Finanzas API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,    # 👈 nada de "*"
-    allow_credentials=True,
+    allow_origins=["*"],      # 👈 cualquier origen
+    allow_credentials=False, # 👈 importante para que "*" sea válido
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # rutas de autenticación
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
