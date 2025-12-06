@@ -1,4 +1,5 @@
 # backend/app/main.py
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,28 +7,38 @@ from pydantic import BaseModel
 from .auth import router as auth_router
 from .db import init_db, SessionLocal, Document, Transaction
 
-
-import os, hashlib, re, csv
+import os
+import hashlib
+import re
+import csv
+import platform
+from io import BytesIO, StringIO
 from datetime import datetime, timedelta
 import datetime as dt
 from decimal import Decimal
 from typing import Optional, Literal
+
 from sqlalchemy import func
 
 # OCR / imágenes / PDF
 import pytesseract
 from PIL import Image, ImageOps, ImageFilter
-from io import BytesIO, StringIO
 import fitz  # PyMuPDF
 
-import platform
+
+# ==========================
+# Configuración Tesseract
+# ==========================
 
 # Solo forzamos la ruta en Windows; en Linux (Render) usará la que viene del sistema
 if platform.system() == "Windows":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
-# --------- Helpers OCR ----------
+# ==========================
+# Funciones de OCR
+# ==========================
+
 def ocr_image_bytes(data: bytes) -> str:
     """OCR sobre imagen con preprocesado básico (sin OpenCV)."""
     try:
@@ -55,16 +66,18 @@ def ocr_image_bytes(data: bytes) -> str:
 
 def ocr_pdf_bytes(data: bytes) -> str:
     """PDF: intenta texto nativo; si no, rasteriza y hace OCR."""
-    parts = []
+    parts: list[str] = []
     try:
         doc = fitz.open(stream=data, filetype="pdf")
     except Exception:
         return ""
     for page in doc:
+        # primero intentamos texto nativo
         t = (page.get_text("text") or "").strip()
         if len(t) >= 25:
             parts.append(t)
             continue
+        # si no hay casi texto, rasterizamos y hacemos OCR
         try:
             pix = page.get_pixmap(dpi=300, alpha=False)
             pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -78,10 +91,14 @@ def ocr_pdf_bytes(data: bytes) -> str:
     return "\n\n".join(parts).strip()
 
 
-# --------- Helpers parsing contable ----------
+# ==========================
+# Helpers de parsing contable
+# ==========================
+
 def extract_date(text: str) -> str:
     m = re.search(
-        r"(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]20\d{2})", text
+        r"(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]20\d{2})",
+        text,
     )
     if not m:
         return dt.date.today().isoformat()
@@ -89,8 +106,10 @@ def extract_date(text: str) -> str:
     parts = raw.split("-")
     try:
         if len(parts[0]) == 4:
+            # YYYY-MM-DD
             return dt.datetime.strptime(raw, "%Y-%m-%d").date().isoformat()
         else:
+            # DD-MM-YYYY
             return dt.datetime.strptime(raw, "%d-%m-%Y").date().isoformat()
     except Exception:
         return dt.date.today().isoformat()
@@ -127,12 +146,15 @@ def parse_rubro(text: str) -> Optional[str]:
 def parse_iva_y_neto(
     text: str,
 ) -> tuple[Optional[Decimal], Optional[Decimal], Optional[Decimal]]:
-    """Devuelve (iva, neto, total). Si no detecta IVA explícito, asume 22% (UY)."""
+    """
+    Devuelve (iva, neto, total). Si no detecta IVA explícito, asume 22% (UY).
+    """
     nums = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})", text)
     if not nums:
         return None, None, None
     vals = [Decimal(n.replace(".", "").replace(",", ".")) for n in nums]
     total = max(vals)
+
     m_iva = re.search(r"iva[^0-9]*([\d.,]{1,15})", text.lower())
     if m_iva:
         iva = Decimal(m_iva.group(1).replace(".", "").replace(",", "."))
@@ -142,55 +164,77 @@ def parse_iva_y_neto(
             neto.quantize(Decimal("0.01")),
             total.quantize(Decimal("0.01")),
         )
+
+    # si no encontramos IVA explícito, asumimos 22%
     iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
     neto = (total - iva).quantize(Decimal("0.01"))
     return iva, neto, total.quantize(Decimal("0.01"))
 
 
-# --------- App / Config ----------
+# ==========================
+# Configuración general app
+# ==========================
+
 STORAGE_PATH = os.path.join(os.path.dirname(__file__), "..", "storage")
 os.makedirs(STORAGE_PATH, exist_ok=True)
 
-app = FastAPI(title="Altium Finanzas API (Local)")
+app = FastAPI(title="Altium Finanzas API")
 
-from fastapi.middleware.cors import CORSMiddleware
+# CORS: permitir frontend local y Vercel
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://altium-finanzas-app.vercel.app",  # frontend en producción
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # 👈 permitir cualquier origen (solo dev)
+    allow_origins=origins,    # 👈 nada de "*"
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(auth_router, prefix="/auth")
+# rutas de autenticación
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
 
 
 @app.on_event("startup")
 def startup():
     init_db()
-    
+
+
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Altium Finanzas API funcionando"}
 
 
-# --------- Modelos de respuesta / entrada ----------
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# ==========================
+# Pydantic models
+# ==========================
+
 class UploadResponse(BaseModel):
     document_id: str
     ocr_preview: str
-    parsed: dict | None = None
+    parsed: Optional[dict] = None
 
 
 class ManualTransactionIn(BaseModel):
     date: dt.date
     kind: Literal["income", "expense"]  # ingreso o gasto
     rubro: str
-    description: str | None = None
+    description: Optional[str] = None
     total: Decimal  # monto total con IVA
 
 
-# --------- Endpoints ----------
+# ==========================
+# Endpoints
+# ==========================
 
 @app.post("/documents/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):
@@ -201,7 +245,7 @@ async def upload_document(file: UploadFile = File(...)):
     checksum = hashlib.sha256(data).hexdigest()
     path = os.path.join(STORAGE_PATH, f"{checksum}-{file.filename}")
 
-    # Guardar archivo
+    # Guardar archivo en disco
     with open(path, "wb") as f:
         f.write(data)
 
@@ -216,6 +260,7 @@ async def upload_document(file: UploadFile = File(...)):
     # Persistir documento
     db = SessionLocal()
     doc = Document(
+        id=None,  # usará default de UUID
         storage_key=path,
         original_filename=file.filename,
         mime_type=file.content_type or "application/octet-stream",
@@ -241,7 +286,8 @@ async def upload_document(file: UploadFile = File(...)):
         kind = "income"
 
     trx = Transaction(
-        kind=kind,
+        id=None,  # UUID
+        kind=kind,  # "income" o "expense"
         occurred_on=dt.datetime.fromisoformat(occurred_on).date(),
         rubro=rubro,
         neto=neto,
@@ -266,7 +312,11 @@ async def upload_document(file: UploadFile = File(...)):
         "iva": str(iva),
         "total": str(total),
     }
-    return {"document_id": str(doc.id), "ocr_preview": preview, "parsed": parsed}
+    return UploadResponse(
+        document_id=str(doc.id),
+        ocr_preview=preview,
+        parsed=parsed,
+    )
 
 
 @app.get("/analytics/income-statement")
@@ -346,11 +396,6 @@ def budget_suggest(
 ):
     """
     Sugiere un presupuesto por rubro/tipo usando el promedio de los últimos N meses (default 6).
-
-    - 'monthly': promedio mensual sugerido
-    - 'annual': monthly * 12
-
-    Ejemplo: year=2025, month=11 => usa datos de mayo a octubre de 2025.
     """
     db = SessionLocal()
 
@@ -408,7 +453,6 @@ def budget_suggest(
     }
 
 
-
 @app.post("/transactions/manual")
 def create_manual_transaction(payload: ManualTransactionIn):
     """
@@ -423,6 +467,7 @@ def create_manual_transaction(payload: ManualTransactionIn):
     neto = (total - iva).quantize(Decimal("0.01"))
 
     trx = Transaction(
+        id=None,
         kind=payload.kind,  # "income" o "expense"
         occurred_on=payload.date,
         rubro=payload.rubro,
@@ -452,10 +497,6 @@ async def import_transactions_csv(file: UploadFile = File(...)):
 
     B) Formato mensual por columnas:
        mes,ventas,compras,alquiler,sueldos,...
-
-       - 'mes' puede ser: 'enero', 'febrero', ..., o '1', '01', etc.
-       - Columnas 'ventas' o 'ingresos' se toman como ingresos (income)
-       - Las demás columnas se toman como gastos (expense)
     """
     if not file.filename:
         raise HTTPException(400, "Archivo inválido")
@@ -497,10 +538,8 @@ async def import_transactions_csv(file: UploadFile = File(...)):
                     raise ValueError("Fecha vacía")
 
                 if "-" in raw_date:
-                    # asumimos YYYY-MM-DD
                     occurred_on = dt.datetime.strptime(raw_date, "%Y-%m-%d").date()
                 elif "/" in raw_date:
-                    # intentamos DD/MM/YYYY
                     occurred_on = dt.datetime.strptime(raw_date, "%d/%m/%Y").date()
                 else:
                     occurred_on = dt.datetime.fromisoformat(raw_date).date()
@@ -531,6 +570,7 @@ async def import_transactions_csv(file: UploadFile = File(...)):
                 continue
 
             trx = Transaction(
+                id=None,
                 kind=kind,
                 occurred_on=occurred_on,
                 rubro=rubro,
@@ -629,7 +669,6 @@ async def import_transactions_csv(file: UploadFile = File(...)):
                 try:
                     total = Decimal(val_str.replace(".", "").replace(",", "."))
                 except Exception:
-                    # valor no numérico, lo salteamos
                     continue
 
                 if total == 0:
@@ -639,7 +678,6 @@ async def import_transactions_csv(file: UploadFile = File(...)):
                 iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
                 neto = (total - iva).quantize(Decimal("0.01"))
 
-                # determinar si es ingreso o gasto
                 if col_norm in ("ventas", "ingresos", "ventas totales"):
                     kind = "income"
                 else:
@@ -649,6 +687,7 @@ async def import_transactions_csv(file: UploadFile = File(...)):
                 description = f"Histórico {raw_mes} - {rubro}"
 
                 trx = Transaction(
+                    id=None,
                     kind=kind,
                     occurred_on=occurred_on,
                     rubro=rubro,
