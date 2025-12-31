@@ -45,6 +45,25 @@ const monthNames = [
   "Diciembre",
 ];
 
+// 👇 Igual que en los otros componentes
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://altium-finanzas-app.onrender.com";
+
+function authFetch(input: RequestInfo, init: RequestInit = {}) {
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("altium_token")
+      : null;
+
+  const headers = new Headers(init.headers || {});
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  return fetch(input, { ...init, headers });
+}
+
 export default function FlujoCaja() {
   const today = new Date();
   const [year, setYear] = useState<number>(today.getFullYear());
@@ -57,9 +76,18 @@ export default function FlujoCaja() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `http://127.0.0.1:8000/analytics/income-statement?year=${y}&month=${m}`
+      const res = await authFetch(
+        `${API_BASE}/analytics/income-statement?year=${y}&month=${m}`
       );
+
+      if (res.status === 401) {
+        setError("Tu sesión expiró. Volvé a iniciar sesión.");
+        // opcional:
+        // window.location.href = "/login";
+        setData(null);
+        return;
+      }
+
       if (!res.ok) {
         throw new Error(`Error HTTP ${res.status}`);
       }
@@ -83,10 +111,8 @@ export default function FlujoCaja() {
     fetchData(year, month);
   };
 
-  const entradas =
-    data?.by_rubro.filter((l) => l.kind === "income") ?? [];
-  const salidas =
-    data?.by_rubro.filter((l) => l.kind === "expense") ?? [];
+  const entradas = data?.by_rubro.filter((l) => l.kind === "income") ?? [];
+  const salidas = data?.by_rubro.filter((l) => l.kind === "expense") ?? [];
 
   const totalEntradas =
     data?.summary.income ?? entradas.reduce((acc, l) => acc + l.total, 0);
@@ -142,7 +168,7 @@ export default function FlujoCaja() {
       {loading && <p>Cargando flujo de caja...</p>}
       {error && <p style={{ color: "red" }}>{error}</p>}
 
-      {data && !loading && (
+      {data && !loading && !error && (
         <>
           <p>
             Período: <strong>{data.period}</strong>{" "}

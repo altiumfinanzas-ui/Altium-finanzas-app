@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-const API_BASE = "http://127.0.0.1:8000";
+import { useEffect, useState } from "react";
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://altium-finanzas-app.onrender.com";
 
-type RubroLine = {
+type RubroRow = {
   rubro: string;
   kind: "income" | "expense";
   neto: number;
@@ -16,493 +18,570 @@ type Summary = {
   income: number;
   expense: number;
   margin: number;
-  prev_income: number;
-  prev_expense: number;
-  prev_margin: number;
-  mom_income_pct: number | null;
-  mom_expense_pct: number | null;
-  margin_pct: number | null;
+
+  // Nuevos campos para costo de ventas
+  purchases?: number | null;
+  initial_stock?: number | null;
+  final_stock?: number | null;
+  cogs?: number | null;
+  gross_margin?: number | null;
+  gross_margin_pct?: number | null;
+
+  prev_income?: number | null;
+  prev_expense?: number | null;
+  prev_margin?: number | null;
+  mom_income_pct?: number | null;
+  mom_expense_pct?: number | null;
+  margin_pct?: number | null;
 };
 
 type IncomeStatementResponse = {
   period: string;
   previous: string;
-  by_rubro: RubroLine[];
+  by_rubro: RubroRow[];
   summary: Summary;
 };
 
-type Mode = "mensual" | "anual";
+type StockResponse = {
+  year: number;
+  month: number;
+  initial_stock: number | null;
+  final_stock: number | null;
+};
 
-const monthNames = [
-  "",
-  "Enero",
-  "Febrero",
-  "Marzo",
-  "Abril",
-  "Mayo",
-  "Junio",
-  "Julio",
-  "Agosto",
-  "Setiembre",
-  "Octubre",
-  "Noviembre",
-  "Diciembre",
-];
-
-function formatMoney(n: number) {
-  return n.toLocaleString("es-UY", { minimumFractionDigits: 2 });
+function formatCurrency(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "-";
+  return value.toLocaleString("es-UY", {
+    style: "currency",
+    currency: "UYU",
+    minimumFractionDigits: 2,
+  });
 }
 
-function formatPct(p: number) {
-  return p.toFixed(1).replace(".", ",") + "%";
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "-";
+  return value.toFixed(1) + " %";
 }
 
 export default function EstadoResultados() {
   const today = new Date();
-  const [year, setYear] = useState<number>(today.getFullYear());
-  const [month, setMonth] = useState<number>(today.getMonth() + 1);
-  const [mode, setMode] = useState<Mode>("mensual"); // 👈 nuevo: mensual/anual
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth() + 1);
+
   const [data, setData] = useState<IncomeStatementResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStock, setLoadingStock] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ---- función que trae datos mensual o anual según "mode" ----
-  const fetchData = async (y: number, m: number, mode: Mode) => {
+  const [stockInitial, setStockInitial] = useState<string>("");
+  const [stockFinal, setStockFinal] = useState<string>("");
+  const [stockMessage, setStockMessage] = useState<string>("");
+
+  const periodLabel = `${month.toString().padStart(2, "0")}/${year}`;
+
+  const loadAll = async () => {
     setLoading(true);
     setError(null);
+    setStockMessage("");
 
     try {
-      if (mode === "mensual") {
-        // 🔹 MODO MENSUAL: igual que siempre
-        const res = await fetch(
-          `${API_BASE}/analytics/income-statement?year=${y}&month=${m}`
-        );
-        if (!res.ok) throw new Error(`Error HTTP ${res.status}`);
-        const json = (await res.json()) as IncomeStatementResponse;
-        setData(json);
-      } else {
-        // 🔹 MODO ANUAL: pedimos los 12 meses y los sumamos acá
-        const promises: Promise<IncomeStatementResponse | null>[] = [];
-        for (let month = 1; month <= 12; month++) {
-          const url = `${API_BASE}/analytics/income-statement?year=${y}&month=${month}`;
-          const p = fetch(url)
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null);
-          promises.push(p as Promise<IncomeStatementResponse | null>);
-        }
-
-        const results = await Promise.all(promises);
-        const valid = results.filter(
-          (r): r is IncomeStatementResponse => r !== null
-        );
-
-        // si no hay datos en ningún mes, dejamos algo vacío
-        if (valid.length === 0) {
-          setData({
-            period: `${y}`,
-            previous: `${y - 1}`,
-            by_rubro: [],
-            summary: {
-              income: 0,
-              expense: 0,
-              margin: 0,
-              prev_income: 0,
-              prev_expense: 0,
-              prev_margin: 0,
-              mom_income_pct: null,
-              mom_expense_pct: null,
-              margin_pct: null,
-            },
-          });
-          return;
-        }
-
-        // juntar todos los by_rubro de todos los meses
-        const allLines = valid.flatMap((v) => v.by_rubro);
-
-        // agrupar por rubro+kind
-        const map = new Map<string, RubroLine>();
-        for (const line of allLines) {
-          const key = `${line.rubro}|${line.kind}`;
-          const existing = map.get(key);
-          if (existing) {
-            existing.neto += line.neto;
-            existing.iva += line.iva;
-            existing.total += line.total;
-          } else {
-            map.set(key, { ...line });
-          }
-        }
-
-        const by_rubro = Array.from(map.values());
-
-        const income = by_rubro
-          .filter((x) => x.kind === "income")
-          .reduce((acc, x) => acc + x.total, 0);
-        const expense = by_rubro
-          .filter((x) => x.kind === "expense")
-          .reduce((acc, x) => acc + x.total, 0);
-        const margin = income - expense;
-
-        const annualData: IncomeStatementResponse = {
-          period: `${y}`, // ejemplo "2025"
-          previous: `${y - 1}`, // solo informativo
-          by_rubro,
-          summary: {
-            income,
-            expense,
-            margin,
-            prev_income: 0,
-            prev_expense: 0,
-            prev_margin: 0,
-            mom_income_pct: null,
-            mom_expense_pct: null,
-            margin_pct: income ? (margin / income) * 100 : null,
-          },
-        };
-
-        setData(annualData);
-      }
-    } catch (e) {
-      console.error(e);
-      setError(
-        "No se pudo obtener el estado de resultados para este período."
+      // 1) EERR
+      const qs = `year=${year}&month=${month}`;
+      const res = await fetch(
+        `${API_BASE}/analytics/income-statement?${qs}`
       );
-      setData(null);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(
+          `Error al obtener estado de resultados: ${res.status} - ${text}`
+        );
+      }
+      const json: IncomeStatementResponse = await res.json();
+      setData(json);
+
+      // 2) Stock (EI y EF) para completar inputs
+      const resStock = await fetch(`${API_BASE}/stock?${qs}`);
+      if (resStock.ok) {
+        const stockJson: StockResponse = await resStock.json();
+        setStockInitial(
+          stockJson.initial_stock !== null
+            ? String(stockJson.initial_stock)
+            : ""
+        );
+        setStockFinal(
+          stockJson.final_stock !== null ? String(stockJson.final_stock) : ""
+        );
+      } else {
+        setStockInitial("");
+        setStockFinal("");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || "No se pudo cargar el estado de resultados");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData(year, month, mode);
+    loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year, month, mode]);
+  }, [year, month]);
 
-  const handleRefresh = () => {
-    fetchData(year, month, mode);
+  const handleSaveStock = async () => {
+    setLoadingStock(true);
+    setStockMessage("");
+    setError(null);
+
+    try {
+      const initial = parseFloat(stockInitial.replace(",", "."));
+      const final = parseFloat(stockFinal.replace(",", "."));
+
+      if (Number.isNaN(initial) || Number.isNaN(final)) {
+        setStockMessage("Montos inválidos. Usa solo números.");
+        setLoadingStock(false);
+        return;
+      }
+
+      const qs = `year=${year}&month=${month}`;
+      const res = await fetch(`${API_BASE}/stock?${qs}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          initial_stock: initial,
+          final_stock: final,
+        }),
+      });
+
+      const text = await res.text();
+      let json: any = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        json = {};
+      }
+
+      if (!res.ok) {
+        console.error("Error guardando stock:", res.status, text);
+        setStockMessage(
+          json?.detail ||
+            `Error al guardar stock: ${res.status} - ${
+              text || "respuesta inválida"
+            }`
+        );
+      } else {
+        setStockMessage("Stock actualizado. Recalculando estado de resultados…");
+        // Volvemos a cargar el EERR para que se actualice Costo de ventas
+        await loadAll();
+        setStockMessage("Stock actualizado correctamente.");
+      }
+    } catch (err: any) {
+      console.error("Error de red al guardar stock:", err);
+      setStockMessage(
+        "Error de red al guardar stock: " + (err?.message || "desconocido")
+      );
+    } finally {
+      setLoadingStock(false);
+    }
   };
 
-  // --- Cálculo de ventas contado / crédito y gastos ---
-  let ventasContado = 0;
-  let ventasCredito = 0;
-  let otrosIngresos = 0;
-  let gastosPorRubro: RubroLine[] = [];
-  let totalGastos = 0;
-
-  if (data) {
-    const ingresos = data.by_rubro.filter((l) => l.kind === "income");
-    gastosPorRubro = data.by_rubro.filter((l) => l.kind === "expense");
-
-    for (const l of ingresos) {
-      const rubroLower = l.rubro.toLowerCase();
-      if (rubroLower.includes("contado")) {
-        ventasContado += l.total;
-      } else if (
-        rubroLower.includes("credito") ||
-        rubroLower.includes("crédito")
-      ) {
-        ventasCredito += l.total;
-      } else {
-        otrosIngresos += l.total;
-      }
-    }
-
-    for (const g of gastosPorRubro) {
-      totalGastos += g.total;
-    }
-  }
-
-  const totalIngresos = ventasContado + ventasCredito + otrosIngresos;
-  const resultado = totalIngresos - totalGastos;
+  const summary = data?.summary;
 
   return (
-    <div>
-      <h2>Estado de Resultados</h2>
+    <div style={{ padding: "16px" }}>
+      <h2 style={{ marginBottom: "8px" }}>Estado de Resultados</h2>
+      <p style={{ marginTop: 0, marginBottom: "16px", color: "#555" }}>
+        Período: <strong>{periodLabel}</strong>
+      </p>
 
-      {/* Controles de período y modo */}
+      {/* Filtros de periodo */}
       <div
         style={{
           display: "flex",
-          gap: "0.75rem",
-          alignItems: "center",
-          margin: "0.75rem 0 1rem",
+          gap: "8px",
+          marginBottom: "16px",
           flexWrap: "wrap",
         }}
       >
-        <label>
-          Año:{" "}
+        <div>
+          <label style={{ display: "block", fontSize: "0.85rem" }}>Año</label>
           <input
             type="number"
             value={year}
-            onChange={(e) =>
-              setYear(Number(e.target.value || today.getFullYear()))
-            }
-            style={{ width: 90 }}
+            onChange={(e) => setYear(parseInt(e.target.value || "0", 10))}
+            style={{ padding: "4px 8px", width: "100px" }}
           />
-        </label>
+        </div>
+        <div>
+          <label style={{ display: "block", fontSize: "0.85rem" }}>Mes</label>
+          <input
+            type="number"
+            min={1}
+            max={12}
+            value={month}
+            onChange={(e) =>
+              setMonth(Math.min(12, Math.max(1, Number(e.target.value || 1))))
+            }
+            style={{ padding: "4px 8px", width: "80px" }}
+          />
+        </div>
+        <button
+          type="button"
+          onClick={loadAll}
+          style={{
+            alignSelf: "flex-end",
+            padding: "6px 12px",
+            borderRadius: "4px",
+            border: "none",
+            background: "#2563eb",
+            color: "#fff",
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+        >
+          Actualizar
+        </button>
+      </div>
 
-        {mode === "mensual" && (
-          <label>
-            Mes:{" "}
-            <select
-              value={month}
-              onChange={(e) => setMonth(Number(e.target.value))}
-            >
-              {monthNames.map((name, idx) =>
-                idx === 0 ? null : (
-                  <option key={idx} value={idx}>
-                    {idx.toString().padStart(2, "0")} - {name}
-                  </option>
-                )
-              )}
-            </select>
-          </label>
-        )}
+      {loading && <p>Cargando estado de resultados…</p>}
+      {error && (
+        <p style={{ color: "red", marginBottom: "12px" }}>{error}</p>
+      )}
 
-        <div style={{ display: "flex", gap: "0.5rem" }}>
+      {/* Bloque de stock inicial / final */}
+      <div
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: "8px",
+          padding: "12px",
+          marginBottom: "16px",
+          background: "#f9fafb",
+        }}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: "8px" }}>
+          Stock de mercaderías
+        </h3>
+        <p style={{ marginTop: 0, fontSize: "0.85rem", color: "#555" }}>
+          Para calcular el <strong>costo de ventas</strong> se usa la fórmula:
+          <br />
+          <em>Existencia inicial + Compras – Existencia final.</em>
+        </p>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "12px",
+            flexWrap: "wrap",
+            marginTop: "8px",
+          }}
+        >
+          <div>
+            <label style={{ display: "block", fontSize: "0.85rem" }}>
+              Existencia inicial
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              value={stockInitial}
+              onChange={(e) => setStockInitial(e.target.value)}
+              style={{ padding: "4px 8px", minWidth: "140px" }}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: "0.85rem" }}>
+              Existencia final
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              value={stockFinal}
+              onChange={(e) => setStockFinal(e.target.value)}
+              style={{ padding: "4px 8px", minWidth: "140px" }}
+            />
+          </div>
           <button
-            onClick={() => setMode("mensual")}
+            type="button"
+            onClick={handleSaveStock}
+            disabled={loadingStock}
             style={{
-              padding: "0.25rem 0.75rem",
-              borderRadius: 4,
-              border:
-                mode === "mensual" ? "2px solid black" : "1px solid #ccc",
+              alignSelf: "flex-end",
+              padding: "6px 12px",
+              borderRadius: "4px",
+              border: "none",
+              background: loadingStock ? "#9ca3af" : "#16a34a",
+              color: "#fff",
+              cursor: loadingStock ? "default" : "pointer",
+              fontWeight: 600,
             }}
           >
-            Mensual
-          </button>
-          <button
-            onClick={() => setMode("anual")}
-            style={{
-              padding: "0.25rem 0.75rem",
-              borderRadius: 4,
-              border: mode === "anual" ? "2px solid black" : "1px solid #ccc",
-            }}
-          >
-            Anual
+            {loadingStock ? "Guardando…" : "Guardar stock"}
           </button>
         </div>
 
-        <button onClick={handleRefresh}>Actualizar</button>
+        {stockMessage && (
+          <p style={{ marginTop: "8px", fontSize: "0.85rem" }}>
+            {stockMessage}
+          </p>
+        )}
       </div>
 
-      {mode === "anual" && (
-        <p style={{ fontSize: "0.9rem", color: "#555" }}>
-          Vista anual: se suman los 12 meses del año seleccionado.
-        </p>
+      {/* Resumen principal */}
+      {summary && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "12px",
+            marginBottom: "16px",
+          }}
+        >
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Ventas</div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.income)}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+              Compras (Mercaderías)
+            </div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.purchases ?? null)}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+              Existencia inicial
+            </div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.initial_stock ?? null)}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+              Existencia final
+            </div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.final_stock ?? null)}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+              Costo de ventas
+            </div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.cogs ?? null)}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+              Resultado bruto
+            </div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.gross_margin ?? null)}
+            </div>
+            <div style={{ fontSize: "0.8rem", color: "#6b7280" }}>
+              {formatPercent(summary.gross_margin_pct ?? null)}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+              Gastos totales
+            </div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.expense)}
+            </div>
+          </div>
+
+          <div
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #e5e7eb",
+              padding: "10px",
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+              Resultado neto (Ingresos - Gastos)
+            </div>
+            <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
+              {formatCurrency(summary.margin)}
+            </div>
+            <div style={{ fontSize: "0.8rem", color: "#6b7280" }}>
+              Margen neto: {formatPercent(summary.margin_pct ?? null)}
+            </div>
+          </div>
+        </div>
       )}
 
-      {loading && <p>Cargando estado de resultados...</p>}
-      {error && <p style={{ color: "red" }}>{error}</p>}
-
-      {data && !loading && (
-        <>
-          <p style={{ marginBottom: "0.75rem" }}>
-            Período:{" "}
-            <strong>
-              {mode === "mensual"
-                ? data.period
-                : `Año ${data.period}`}{" "}
-            </strong>
-          </p>
-
-          {/* Ingresos */}
-          <section style={{ marginBottom: "1.5rem" }}>
-            <h3>Ingresos</h3>
-            {totalIngresos === 0 ? (
-              <p>No hay ingresos registrados en este período.</p>
-            ) : (
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  marginTop: "0.75rem",
-                }}
-              >
-                <thead>
-                  <tr>
-                    <th
-                      style={{
-                        textAlign: "left",
-                        borderBottom: "1px solid #ccc",
-                        padding: "0.25rem",
-                      }}
-                    >
-                      Concepto
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "right",
-                        borderBottom: "1px solid #ccc",
-                        padding: "0.25rem",
-                      }}
-                    >
-                      Total
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={{ padding: "0.25rem" }}>Ventas contado</td>
-                    <td style={{ padding: "0.25rem", textAlign: "right" }}>
-                      $ {formatMoney(ventasContado)}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={{ padding: "0.25rem" }}>Ventas crédito</td>
-                    <td style={{ padding: "0.25rem", textAlign: "right" }}>
-                      $ {formatMoney(ventasCredito)}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={{ padding: "0.25rem" }}>Otros ingresos</td>
-                    <td style={{ padding: "0.25rem", textAlign: "right" }}>
-                      $ {formatMoney(otrosIngresos)}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td
-                      style={{
-                        padding: "0.25rem",
-                        borderTop: "1px solid #ccc",
-                        fontWeight: 600,
-                      }}
-                    >
-                      Total ingresos
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.25rem",
-                        textAlign: "right",
-                        borderTop: "1px solid #ccc",
-                        fontWeight: 600,
-                      }}
-                    >
-                      $ {formatMoney(totalIngresos)}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            )}
-          </section>
-
-          {/* Gastos */}
-          <section style={{ marginBottom: "1.5rem" }}>
-            <h3>Gastos por rubro</h3>
-            {totalGastos === 0 ? (
-              <p>No hay gastos registrados en este período.</p>
-            ) : (
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  marginTop: "0.75rem",
-                }}
-              >
-                <thead>
-                  <tr>
-                    <th
-                      style={{
-                        textAlign: "left",
-                        borderBottom: "1px solid #ccc",
-                        padding: "0.25rem",
-                      }}
-                    >
-                      Rubro
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "right",
-                        borderBottom: "1px solid #ccc",
-                        padding: "0.25rem",
-                      }}
-                    >
-                      Neto
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "right",
-                        borderBottom: "1px solid #ccc",
-                        padding: "0.25rem",
-                      }}
-                    >
-                      IVA
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "right",
-                        borderBottom: "1px solid #ccc",
-                        padding: "0.25rem",
-                      }}
-                    >
-                      Total
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {gastosPorRubro.map((g) => (
-                    <tr key={`${g.rubro}-${g.kind}`}>
-                      <td style={{ padding: "0.25rem" }}>{g.rubro}</td>
-                      <td style={{ padding: "0.25rem", textAlign: "right" }}>
-                        $ {formatMoney(g.neto)}
-                      </td>
-                      <td style={{ padding: "0.25rem", textAlign: "right" }}>
-                        $ {formatMoney(g.iva)}
-                      </td>
-                      <td style={{ padding: "0.25rem", textAlign: "right" }}>
-                        $ {formatMoney(g.total)}
-                      </td>
-                    </tr>
-                  ))}
-                  <tr>
-                    <td
-                      style={{
-                        padding: "0.25rem",
-                        borderTop: "1px solid #ccc",
-                        fontWeight: 600,
-                      }}
-                    >
-                      Total gastos
-                    </td>
-                    <td />
-                    <td />
-                    <td
-                      style={{
-                        padding: "0.25rem",
-                        textAlign: "right",
-                        borderTop: "1px solid #ccc",
-                        fontWeight: 600,
-                      }}
-                    >
-                      $ {formatMoney(totalGastos)}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            )}
-          </section>
-
-          {/* Resultado */}
-          <section>
-            <h3>
-              Resultado neto del{" "}
-              {mode === "mensual" ? "período" : "año seleccionado"}
-            </h3>
-            <p>
-              Resultado:{" "}
-              <strong>
-                $ {formatMoney(resultado)}{" "}
-                {resultado > 0
-                  ? "(ganancia)"
-                  : resultado < 0
-                  ? "(pérdida)"
-                  : "(empate)"}
-              </strong>
-            </p>
-          </section>
-        </>
+      {/* Detalle por rubro */}
+      {data && (
+        <div>
+          <h3 style={{ marginTop: "8px" }}>Detalle por rubro</h3>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              marginTop: "8px",
+              fontSize: "0.9rem",
+            }}
+          >
+            <thead>
+              <tr>
+                <th
+                  style={{
+                    textAlign: "left",
+                    borderBottom: "1px solid #e5e7eb",
+                    padding: "4px",
+                  }}
+                >
+                  Rubro
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    borderBottom: "1px solid #e5e7eb",
+                    padding: "4px",
+                  }}
+                >
+                  Tipo
+                </th>
+                <th
+                  style={{
+                    textAlign: "right",
+                    borderBottom: "1px solid #e5e7eb",
+                    padding: "4px",
+                  }}
+                >
+                  Neto
+                </th>
+                <th
+                  style={{
+                    textAlign: "right",
+                    borderBottom: "1px solid #e5e7eb",
+                    padding: "4px",
+                  }}
+                >
+                  IVA
+                </th>
+                <th
+                  style={{
+                    textAlign: "right",
+                    borderBottom: "1px solid #e5e7eb",
+                    padding: "4px",
+                  }}
+                >
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.by_rubro.map((row, idx) => (
+                <tr key={idx}>
+                  <td
+                    style={{
+                      borderBottom: "1px solid #f3f4f6",
+                      padding: "4px",
+                    }}
+                  >
+                    {row.rubro}
+                  </td>
+                  <td
+                    style={{
+                      borderBottom: "1px solid #f3f4f6",
+                      padding: "4px",
+                    }}
+                  >
+                    {row.kind === "income" ? "Ingreso" : "Gasto"}
+                  </td>
+                  <td
+                    style={{
+                      borderBottom: "1px solid #f3f4f6",
+                      padding: "4px",
+                      textAlign: "right",
+                    }}
+                  >
+                    {formatCurrency(row.neto)}
+                  </td>
+                  <td
+                    style={{
+                      borderBottom: "1px solid #f3f4f6",
+                      padding: "4px",
+                      textAlign: "right",
+                    }}
+                  >
+                    {formatCurrency(row.iva)}
+                  </td>
+                  <td
+                    style={{
+                      borderBottom: "1px solid #f3f4f6",
+                      padding: "4px",
+                      textAlign: "right",
+                    }}
+                  >
+                    {formatCurrency(row.total)}
+                  </td>
+                </tr>
+              ))}
+              {data.by_rubro.length === 0 && (
+                <tr>
+                  <td colSpan={5} style={{ padding: "8px", textAlign: "center" }}>
+                    No hay movimientos en este período.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
 }
+

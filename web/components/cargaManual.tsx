@@ -4,6 +4,26 @@ import React, { useState } from "react";
 
 type Kind = "income" | "expense";
 
+// 👇 Igual que en page.tsx: API de Render con opción a env var
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://altium-finanzas-app.onrender.com";
+
+// 👇 Helper para llamar al backend con el token del login
+function authFetch(input: RequestInfo, init: RequestInit = {}) {
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("altium_token")
+      : null;
+
+  const headers = new Headers(init.headers || {});
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  return fetch(input, { ...init, headers });
+}
+
 export default function CargaManual() {
   const [date, setDate] = useState<string>("");
   const [kind, setKind] = useState<Kind>("income");
@@ -21,9 +41,7 @@ export default function CargaManual() {
       return;
     }
 
-    const monto = Number(
-      total.replace(".", "").replace(",", ".")
-    );
+    const monto = Number(total.replace(".", "").replace(",", "."));
 
     if (isNaN(monto) || monto <= 0) {
       setStatus("El monto debe ser un número mayor a cero.");
@@ -31,31 +49,33 @@ export default function CargaManual() {
     }
 
     try {
-      const res = await fetch(
-        "http://127.0.0.1:8000/transactions/manual",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            date,
-            kind,
-            rubro,
-            description: description || null,
-            total: monto,
-          }),
-        }
-      );
+      const res = await authFetch(`${API_BASE}/transactions/manual`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          date,
+          kind,
+          rubro,
+          description: description || null,
+          total: monto,
+        }),
+      });
+
+      if (res.status === 401) {
+        setStatus("Tu sesión expiró. Volvé a iniciar sesión.");
+        // opcional: redirigir automáticamente
+        // window.location.href = "/login";
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(`Error HTTP ${res.status}`);
       }
 
       const json = await res.json();
-      setStatus(
-        `Transacción guardada correctamente (id ${json.id}).`
-      );
+      setStatus(`Transacción guardada correctamente (id ${json.id}).`);
 
       // limpiar formulario
       setRubro("");
@@ -64,7 +84,7 @@ export default function CargaManual() {
     } catch (err) {
       console.error(err);
       setStatus(
-        "No se pudo guardar la transacción. Verificá que el backend esté corriendo."
+        "No se pudo guardar la transacción. Verificá tu conexión o probá de nuevo en unos minutos."
       );
     }
   };
@@ -73,8 +93,8 @@ export default function CargaManual() {
     <div>
       <h2>Carga manual de ingresos y gastos</h2>
       <p style={{ marginBottom: "0.75rem" }}>
-        Usá este formulario cuando no tengas un comprobante para
-        subir, o quieras registrar un movimiento a mano.
+        Usá este formulario cuando no tengas un comprobante para subir, o
+        quieras registrar un movimiento a mano.
       </p>
 
       <form

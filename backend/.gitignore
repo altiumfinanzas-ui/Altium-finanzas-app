@@ -1,28 +1,9 @@
-# Entorno virtual de Python
-.venv/
-venv/
-env/
+# No subir dependencias de frontend
+web/node_modules
 
-# Python
-__pycache__/
-*.pyc
+# No subir builds de Next.js
+web/.next
 
-# Next.js / Node
-node_modules/
-web/node_modules/
-web/.next/
-web/.turbo/
-web/out/
+# No subir la base de datos local
+backend/db.sqlite
 
-# Archivos de sistema
-.DS_Store
-Thumbs.db
-
-# Archivos de IDE
-.vscode/
-.idea/
-
-# Otros
-*.log
-.env
-.env.*

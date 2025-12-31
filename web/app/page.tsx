@@ -9,9 +9,28 @@ import InformeMensual from "../components/InformeMensual";
 
 type TabKey = "estado" | "presupuesto" | "flujo" | "manual" | "informe";
 
-const API_BASE = "http://127.0.0.1:8000";
-const TRIAL_DAYS = 30;
+// API apuntando a Render (o env var)
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://altium-finanzas-app.onrender.com";
+
+const TRIAL_DAYS = 60;
 const TRIAL_KEY = "altium_trial_start";
+
+// Helper para usar siempre el token del login
+function authFetch(input: RequestInfo, init: RequestInit = {}) {
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("altium_token")
+      : null;
+
+  const headers = new Headers(init.headers || {});
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  return fetch(input, { ...init, headers });
+}
 
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
@@ -34,9 +53,10 @@ export default function Home() {
   // Inicializa y calcula la prueba gratuita
   useEffect(() => {
     try {
-      const stored = typeof window !== "undefined"
-        ? window.localStorage.getItem(TRIAL_KEY)
-        : null;
+      const stored =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(TRIAL_KEY)
+          : null;
 
       let startDate: Date;
 
@@ -71,7 +91,7 @@ export default function Home() {
     if (!files.length) return;
     if (!isTrialActive) {
       setStatus(
-        "Tu período de prueba terminó. Podés seguir viendo tus datos, pero para cargar nuevos archivos necesitás pasar al plan PRO."
+        "Tu período de prueba test terminó. Podés seguir viendo tus datos, pero para cargar nuevos archivos necesitás pasar al plan PRO."
       );
       return;
     }
@@ -88,10 +108,13 @@ export default function Home() {
       try {
         // Si es CSV -> lo mandamos al importador histórico
         if (lowerName.endsWith(".csv")) {
-          const res = await fetch(`${API_BASE}/transactions/import-csv`, {
-            method: "POST",
-            body: fd,
-          });
+          const res = await authFetch(
+            `${API_BASE}/transactions/import-csv`,
+            {
+              method: "POST",
+              body: fd,
+            }
+          );
 
           if (!res.ok) {
             throw new Error(`HTTP ${res.status}`);
@@ -103,7 +126,7 @@ export default function Home() {
           );
         } else {
           // Si NO es CSV -> va al OCR normal de comprobantes
-          const res = await fetch(`${API_BASE}/documents/upload`, {
+          const res = await authFetch(`${API_BASE}/documents/upload`, {
             method: "POST",
             body: fd,
           });
@@ -134,6 +157,7 @@ export default function Home() {
   };
 
   const canUpload = isTrialActive && files.length > 0;
+
   if (checkingAuth) {
     return (
       <main style={{ padding: "16px" }}>
@@ -159,21 +183,29 @@ export default function Home() {
           <>Calculando tu período de prueba...</>
         ) : isTrialActive ? (
           <>
-            <strong>Estás en tu período de prueba gratuita.</strong>{" "}
+            <strong>Estás usando la versión de prueba de Altium Finanzas.</strong>{" "}
             Te quedan{" "}
             <strong>
               {daysLeft} día{daysLeft === 1 ? "" : "s"}
             </strong>{" "}
-            para usar todas las funciones sin límite. Luego vas a poder seguir
-            viendo tus datos, pero no cargar nuevos archivos.
+            para usar todas las funciones sin límite.
+            <br />
+            Aprovechá este tiempo para cargar comprobantes, históricos y ver cómo
+            está realmente tu negocio.
+            <br />
+            <br />
+            Cuando termine la prueba vas a poder seguir entrando a mirar tus datos.
+            Para seguir cargando nueva información podés pasarte al{" "}
+            <strong>Plan PRO</strong>.
           </>
         ) : (
           <>
-            <strong>Tu período de prueba gratuita terminó.</strong>{" "}
-            Podés seguir entrando a ver tus estados, presupuesto, flujo e
-            informes, pero para seguir cargando nuevos comprobantes e históricos
-            necesitás pasar al plan PRO (u$s 9,99/mes). Si te interesa, escribinos
-            y lo coordinamos.
+            <strong>Tu prueba gratuita de Altium Finanzas ya terminó.</strong>{" "}
+            Podés seguir entrando a ver tus estados, presupuesto, flujo e informes,
+            pero para seguir cargando nuevos comprobantes e históricos necesitás
+            pasar al <strong>Plan PRO</strong> (u$s 9,99/mes).
+            <br />
+            Si te interesa, escribinos y lo coordinamos.
           </>
         )}
       </div>
@@ -181,12 +213,13 @@ export default function Home() {
       {/* HERO / LANDING SIMPLE */}
       <header style={{ marginBottom: "2rem" }}>
         <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>
-          Altium Finanzas 2.0
+          La manera simple de entender la plata de tu negocio.
         </h1>
         <p style={{ fontSize: "1rem", color: "#444", maxWidth: 700 }}>
-          Una herramienta pensada para dueños de pequeños negocios que quieren
-          entender, en sencillo, si su emprendimiento está ganando plata, dónde
-          se va el dinero y qué podrían mejorar.
+          Altium Finanzas te muestra, en segundos, si tu negocio está ganando o
+          perdiendo plata, qué gastos te están pesando y cómo podés mejorar mes a mes.
+          Pensado para emprendedores, pequeños comercios y profesionales independientes.
+          Sin planillas. Sin lenguaje de contador. En sencillo.
         </p>
 
         <div
@@ -208,10 +241,10 @@ export default function Home() {
               fontWeight: 600,
             }}
           >
-            Usar la app ahora
+            Comenzar ahora
           </button>
           <span style={{ fontSize: "0.9rem", color: "#666" }}>
-            Funciona desde la web y la podés usar desde el celular.
+            Funciona desde la web y la podés usar desde el celular, sin instalar nada.
           </span>
         </div>
       </header>
@@ -226,23 +259,30 @@ export default function Home() {
         }}
       >
         <div>
-          <h2>¿Qué hace Altium Finanzas por vos?</h2>
+          <h2>¿Qué vas a lograr con Altium Finanzas?</h2>
           <ul style={{ paddingLeft: "1.2rem", marginTop: "0.5rem" }}>
             <li>
-              Te arma un <strong>estado de resultados</strong> claro: cuánto
-              entra, cuánto sale y si ganás o perdés.
+              Saber si tu negocio está ganando plata o no, sin hacer cuentas
+              ni abrir planillas.
             </li>
             <li>
-              Te sugiere un <strong>presupuesto</strong> usando tus últimos
-              meses como referencia.
+              Ver tus <strong>ingresos y gastos ordenados por rubro</strong> para
+              entender dónde se va el dinero.
             </li>
             <li>
-              Te muestra el <strong>flujo de caja</strong> para que veas si te
-              va a faltar o sobrar plata.
+              Mirar tu <strong>flujo de caja</strong> y anticipar si te va a faltar
+              o sobrar plata en el mes.
             </li>
             <li>
-              Te genera un <strong>informe en lenguaje simple</strong>, pensado
-              para alguien que no es contador.
+              Tener un <strong>presupuesto sugerido</strong> usando tus últimos meses
+              como referencia.
+            </li>
+            <li>
+              Recibir un <strong>informe mensual en lenguaje simple</strong>, con
+              ideas concretas para mejorar tus resultados.
+            </li>
+            <li>
+              Cargar comprobantes y planillas históricas sin pelearte con Excel.
             </li>
           </ul>
         </div>
@@ -255,13 +295,17 @@ export default function Home() {
             fontSize: "0.9rem",
           }}
         >
-          <h3>¿Para quién es?</h3>
+          <h3>¿A quién le sirve?</h3>
           <ul style={{ paddingLeft: "1.2rem", marginTop: "0.5rem" }}>
-            <li>Emprendedores que recién empiezan.</li>
-            <li>Dueños de pequeños negocios con poco tiempo.</li>
+            <li>Emprendedores y pequeños comercios que quieren ordenarse.</li>
+            <li>Profesionales independientes que trabajan por su cuenta.</li>
             <li>
-              Personas que quieren entender sus números sin hablar “en
-              contadores”.
+              Negocios que no llevan una contabilidad formal pero necesitan entender
+              si están ganando plata.
+            </li>
+            <li>
+              Personas que se cansaron de las planillas y quieren ver sus números
+              “en criollo”.
             </li>
           </ul>
         </div>
@@ -272,16 +316,20 @@ export default function Home() {
         <h2>¿Cómo funciona?</h2>
         <ol style={{ paddingLeft: "1.2rem", marginTop: "0.5rem" }}>
           <li>
-            Subís fotos o PDFs de tus comprobantes, o un archivo histórico en
-            CSV/Excel con tus ventas y gastos.
+            Cargás fotos o PDFs de tus comprobantes, o un archivo histórico
+            en Excel/CSV con tus ventas y gastos.
           </li>
           <li>
-            La app procesa los datos y arma automáticamente tus estados,
-            presupuesto y flujo.
+            La app lee y organiza automáticamente tus ingresos y egresos
+            por rubro y período.
           </li>
           <li>
-            Leés el informe en lenguaje simple y, si querés, pedís una
-            consultoría personalizada para ir más a fondo.
+            Ves tus <strong>estados, presupuesto y flujo de caja</strong> ya armados,
+            sin fórmulas ni planillas.
+          </li>
+          <li>
+            Leés un <strong>informe en lenguaje simple</strong> con los puntos
+            clave del mes y sugerencias prácticas para mejorar.
           </li>
         </ol>
       </section>
@@ -431,7 +479,8 @@ export default function Home() {
           {tab === "informe" && <InformeMensual />}
         </section>
       </section>
-            {/* PLAN PRO */}
+
+      {/* PLAN PRO */}
       <hr style={{ margin: "2rem 0" }} />
       <div
         style={{
@@ -444,8 +493,9 @@ export default function Home() {
       >
         <h3>Plan PRO – u$s 9,99 / mes</h3>
         <p style={{ fontSize: "0.9rem", color: "#555" }}>
-          Pensado para dueños de pequeños negocios que quieren tener sus
-          números al día sin volverse locos con planillas.
+          Pensado para dueños de pequeños negocios y profesionales
+          independientes que quieren tener sus números claros sin vivir
+          peleados con las planillas.
         </p>
         <ul
           style={{
@@ -457,16 +507,23 @@ export default function Home() {
         >
           <li>Uso ilimitado de la app.</li>
           <li>Estados de resultados mensuales y anuales.</li>
+          <li>Flujo de caja para anticiparte a faltantes de plata.</li>
           <li>Presupuesto sugerido y editable por rubro.</li>
-          <li>Flujo de caja para ver si te falta o sobra plata.</li>
           <li>Informe mensual explicado en lenguaje simple.</li>
-          <li>Prioridad para consultas por mail.</li>
+          <li>Soporte prioritario por mail.</li>
         </ul>
-        <p style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.5rem" }}>
-          Después de tus 30 días de prueba, podés seguir viendo tus datos
-          gratis, pero para cargar nuevos comprobantes e históricos
-          necesitás pasar al plan PRO.
+        <p
+          style={{
+            fontSize: "0.85rem",
+            color: "#666",
+            marginTop: "0.5rem",
+          }}
+        >
+          Después de tus <strong>60 días de prueba gratuita</strong>, vas a poder
+          seguir entrando a ver tus datos sin costo. Para seguir cargando nuevos
+          comprobantes e históricos, podés pasarte al <strong>Plan PRO</strong>.
         </p>
+
         <button
           style={{
             marginTop: "0.75rem",
@@ -486,7 +543,6 @@ export default function Home() {
           Quiero pasar al Plan PRO
         </button>
       </div>
-
 
       {/* Consultoría personalizada */}
       <hr style={{ margin: "2rem 0" }} />
@@ -525,3 +581,4 @@ export default function Home() {
     </main>
   );
 }
+

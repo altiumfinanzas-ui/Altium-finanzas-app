@@ -1,0 +1,4 @@
+web/node_modules
+web/.next
+backend/db.sqlite
+backend/app/__pycache__/

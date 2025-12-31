@@ -34,6 +34,25 @@ const monthNames = [
   "Diciembre",
 ];
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://altium-finanzas-app.onrender.com";
+
+// 👇 Igual que en page.tsx / CargaManual: helper con token
+function authFetch(input: RequestInfo, init: RequestInit = {}) {
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("altium_token")
+      : null;
+
+  const headers = new Headers(init.headers || {});
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  return fetch(input, { ...init, headers });
+}
+
 function formatMoney(n: number) {
   return n.toLocaleString("es-UY", { minimumFractionDigits: 2 });
 }
@@ -50,17 +69,29 @@ export default function Presupuesto() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `http://127.0.0.1:8000/budget/suggest?year=${y}&month=${m}&window_months=6`
+      const res = await authFetch(
+        `${API_BASE}/budget/suggest?year=${y}&month=${m}&window_months=6`
       );
+
+      if (res.status === 401) {
+        setError("Tu sesión expiró. Volvé a iniciar sesión.");
+        // opcional: redirigir
+        // window.location.href = "/login";
+        setData(null);
+        return;
+      }
+
       if (!res.ok) {
         throw new Error(`Error HTTP ${res.status}`);
       }
+
       const json = (await res.json()) as BudgetResponse;
       setData(json);
     } catch (e) {
       console.error(e);
-      setError("No se pudo calcular el presupuesto sugerido para este período.");
+      setError(
+        "No se pudo calcular el presupuesto sugerido para este período."
+      );
       setData(null);
     } finally {
       setLoading(false);
@@ -90,7 +121,10 @@ export default function Presupuesto() {
       const rubroLower = l.rubro.toLowerCase();
       if (rubroLower.includes("contado")) {
         ventasContadoMensual += l.monthly;
-      } else if (rubroLower.includes("credito") || rubroLower.includes("crédito")) {
+      } else if (
+        rubroLower.includes("credito") ||
+        rubroLower.includes("crédito")
+      ) {
         ventasCreditoMensual += l.monthly;
       } else {
         otrosIngresosMensual += l.monthly;
@@ -160,12 +194,12 @@ export default function Presupuesto() {
       {loading && <p>Calculando presupuesto...</p>}
       {error && <p style={{ color: "red" }}>{error}</p>}
 
-      {data && !loading && (
+      {data && !loading && !error && (
         <>
           <p style={{ marginBottom: "0.75rem" }}>
             Este presupuesto se arma usando el promedio de los últimos{" "}
-            <strong>{data.window_months}</strong> meses de datos reales
-            ({data.from} a {data.to_exclusive}).
+            <strong>{data.window_months}</strong> meses de datos reales (
+            {data.from} a {data.to_exclusive}).
           </p>
 
           {/* Ingresos estimados */}

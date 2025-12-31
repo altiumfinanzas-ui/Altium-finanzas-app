@@ -1,11 +1,18 @@
 # backend/app/main.py
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .auth import router as auth_router
-from .db import init_db, SessionLocal, Document, Transaction
+from .auth import router as auth_router, get_current_user
+from .db import (
+    init_db,
+    SessionLocal,
+    User,
+    Document,
+    Transaction,
+    StockSnapshot,
+)
 
 import os
 import hashlib
@@ -30,7 +37,6 @@ import fitz  # PyMuPDF
 # Configuración Tesseract
 # ==========================
 
-# Solo forzamos la ruta en Windows; en Linux (Render) usará la que viene del sistema
 if platform.system() == "Windows":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
@@ -52,7 +58,6 @@ def ocr_image_bytes(data: bytes) -> str:
         img = ImageOps.autocontrast(img)
         img = img.filter(ImageFilter.MedianFilter(size=3))
 
-        # binarización simple heurística
         hist = img.histogram()
         thr = 180 if sum(hist[:128]) < sum(hist[128:]) else 150
         img = img.point(lambda p: 255 if p > thr else 0)
@@ -72,12 +77,10 @@ def ocr_pdf_bytes(data: bytes) -> str:
     except Exception:
         return ""
     for page in doc:
-        # primero intentamos texto nativo
         t = (page.get_text("text") or "").strip()
         if len(t) >= 25:
             parts.append(t)
             continue
-        # si no hay casi texto, rasterizamos y hacemos OCR
         try:
             pix = page.get_pixmap(dpi=300, alpha=False)
             pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -106,10 +109,8 @@ def extract_date(text: str) -> str:
     parts = raw.split("-")
     try:
         if len(parts[0]) == 4:
-            # YYYY-MM-DD
             return dt.datetime.strptime(raw, "%Y-%m-%d").date().isoformat()
         else:
-            # DD-MM-YYYY
             return dt.datetime.strptime(raw, "%d-%m-%Y").date().isoformat()
     except Exception:
         return dt.date.today().isoformat()
@@ -146,9 +147,6 @@ def parse_rubro(text: str) -> Optional[str]:
 def parse_iva_y_neto(
     text: str,
 ) -> tuple[Optional[Decimal], Optional[Decimal], Optional[Decimal]]:
-    """
-    Devuelve (iva, neto, total). Si no detecta IVA explícito, asume 22% (UY).
-    """
     nums = re.findall(r"\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})", text)
     if not nums:
         return None, None, None
@@ -165,7 +163,6 @@ def parse_iva_y_neto(
             total.quantize(Decimal("0.01")),
         )
 
-    # si no encontramos IVA explícito, asumimos 22%
     iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
     neto = (total - iva).quantize(Decimal("0.01"))
     return iva, neto, total.quantize(Decimal("0.01"))
@@ -180,21 +177,27 @@ os.makedirs(STORAGE_PATH, exist_ok=True)
 
 app = FastAPI(title="Altium Finanzas API")
 
-# CORS: permitir frontend local y Vercel
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(title="Altium Finanzas API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # 👈 cualquier origen
-    allow_credentials=False, # 👈 importante para que "*" sea válido
+    allow_origins=[
+        "https://altium-finanzas-app.vercel.app",
+        "https://altium-finanzas-app-git-main.vercel.app",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# rutas de autenticación
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 
 
@@ -225,18 +228,118 @@ class UploadResponse(BaseModel):
 
 class ManualTransactionIn(BaseModel):
     date: dt.date
-    kind: Literal["income", "expense"]  # ingreso o gasto
+    kind: Literal["income", "expense"]
     rubro: str
     description: Optional[str] = None
-    total: Decimal  # monto total con IVA
+    total: Decimal
+
+
+class StockIn(BaseModel):
+    initial_stock: Decimal
+    final_stock: Decimal
 
 
 # ==========================
-# Endpoints
+# Endpoints: stock (EI/EF)
+# ==========================
+
+@app.get("/stock")
+def get_stock(
+    year: int = Query(...),
+    month: int = Query(...),
+    current_user: User = Depends(get_current_user),
+):
+    db = SessionLocal()
+    try:
+        ym = f"{year:04d}"
+        mm = f"{month:02d}"
+
+        snap = (
+            db.query(StockSnapshot)
+            .filter(
+                StockSnapshot.user_id == current_user.id,
+                StockSnapshot.year == ym,
+                StockSnapshot.month == mm,
+            )
+            .first()
+        )
+        if not snap:
+            return {
+                "year": year,
+                "month": month,
+                "initial_stock": None,
+                "final_stock": None,
+            }
+
+        return {
+            "year": year,
+            "month": month,
+            "initial_stock": float(snap.initial_stock or 0),
+            "final_stock": float(snap.final_stock or 0),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/stock")
+def upsert_stock(
+    year: int = Query(...),
+    month: int = Query(...),
+    payload: StockIn = None,
+    current_user: User = Depends(get_current_user),
+):
+    if payload is None:
+        raise HTTPException(400, "Falta payload de stock")
+
+    db = SessionLocal()
+    try:
+        ym = f"{year:04d}"
+        mm = f"{month:02d}"
+
+        snap = (
+            db.query(StockSnapshot)
+            .filter(
+                StockSnapshot.user_id == current_user.id,
+                StockSnapshot.year == ym,
+                StockSnapshot.month == mm,
+            )
+            .first()
+        )
+
+        if not snap:
+            snap = StockSnapshot(
+                user_id=current_user.id,
+                year=ym,
+                month=mm,
+            )
+            db.add(snap)
+
+        snap.initial_stock = payload.initial_stock.quantize(Decimal("0.01"))
+        snap.final_stock = payload.final_stock.quantize(Decimal("0.01"))
+
+        db.commit()
+        db.refresh(snap)
+
+        return {
+            "year": year,
+            "month": month,
+            "initial_stock": float(snap.initial_stock or 0),
+            "final_stock": float(snap.final_stock or 0),
+            "message": "Stock actualizado correctamente",
+        }
+    finally:
+        db.close()
+
+
+# ==========================
+# Endpoints: documentos / OCR
 # ==========================
 
 @app.post("/documents/upload", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     if not file.filename:
         raise HTTPException(400, "Archivo inválido")
 
@@ -244,11 +347,9 @@ async def upload_document(file: UploadFile = File(...)):
     checksum = hashlib.sha256(data).hexdigest()
     path = os.path.join(STORAGE_PATH, f"{checksum}-{file.filename}")
 
-    # Guardar archivo en disco
     with open(path, "wb") as f:
         f.write(data)
 
-    # OCR según tipo
     filename = (file.filename or "").lower()
     mime = (file.content_type or "").lower()
     if filename.endswith(".pdf") or "pdf" in mime:
@@ -256,263 +357,307 @@ async def upload_document(file: UploadFile = File(...)):
     else:
         ocr_text = ocr_image_bytes(data)
 
-    # Persistir documento
     db = SessionLocal()
-    doc = Document(
-        id=None,  # usará default de UUID
-        storage_key=path,
-        original_filename=file.filename,
-        mime_type=file.content_type or "application/octet-stream",
-        checksum=checksum,
-        status="ready",
-        ocr_text=ocr_text,
-        created_at=datetime.utcnow(),
-    )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
+    try:
+        doc = Document(
+            user_id=current_user.id,
+            storage_key=path,
+            original_filename=file.filename,
+            mime_type=file.content_type or "application/octet-stream",
+            checksum=checksum,
+            status="ready",
+            ocr_text=ocr_text,
+            created_at=datetime.utcnow(),
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
 
-    # ---- Parsing contable y guardar transacción ----
-    occurred_on = extract_date(ocr_text or "")
-    rubro = parse_rubro(ocr_text or "") or "Sin clasificar"
-    iva, neto, total = parse_iva_y_neto(ocr_text or "")
-    if iva is None or neto is None or total is None:
-        iva, neto, total = Decimal("0.00"), Decimal("0.00"), Decimal("0.00")
+        occurred_on = extract_date(ocr_text or "")
+        rubro = parse_rubro(ocr_text or "") or "Sin clasificar"
+        iva, neto, total = parse_iva_y_neto(ocr_text or "")
+        if iva is None or neto is None or total is None:
+            iva, neto, total = Decimal("0.00"), Decimal("0.00"), Decimal("0.00")
 
-    kind = "expense"
-    tlow = (ocr_text or "").lower()
-    if "venta" in tlow or "ingreso" in tlow:
-        kind = "income"
+        kind = "expense"
+        tlow = (ocr_text or "").lower()
+        if "venta" in tlow or "ingreso" in tlow:
+            kind = "income"
 
-    trx = Transaction(
-        id=None,  # UUID
-        kind=kind,  # "income" o "expense"
-        occurred_on=dt.datetime.fromisoformat(occurred_on).date(),
-        rubro=rubro,
-        neto=neto,
-        iva=iva,
-        total=total,
-        description=(ocr_text or "")[:240],
-        document_id=str(doc.id),
-    )
-    db.add(trx)
-    db.commit()
+        trx = Transaction(
+            user_id=current_user.id,
+            kind=kind,
+            occurred_on=dt.datetime.fromisoformat(occurred_on).date(),
+            rubro=rubro,
+            neto=neto,
+            iva=iva,
+            total=total,
+            description=(ocr_text or "")[:240],
+            document_id=str(doc.id),
+        )
+        db.add(trx)
+        db.commit()
 
-    # Preview para la UI
-    preview = (ocr_text or "").replace("\n", " ").strip()
-    if len(preview) > 160:
-        preview = preview[:160] + "..."
+        preview = (ocr_text or "").replace("\n", " ").strip()
+        if len(preview) > 160:
+            preview = preview[:160] + "..."
 
-    parsed = {
-        "date": occurred_on,
-        "kind": kind,
-        "rubro": rubro,
-        "neto": str(neto),
-        "iva": str(iva),
-        "total": str(total),
-    }
-    return UploadResponse(
-        document_id=str(doc.id),
-        ocr_preview=preview,
-        parsed=parsed,
-    )
+        parsed = {
+            "date": occurred_on,
+            "kind": kind,
+            "rubro": rubro,
+            "neto": str(neto),
+            "iva": str(iva),
+            "total": str(total),
+        }
+        return UploadResponse(
+            document_id=str(doc.id),
+            ocr_preview=preview,
+            parsed=parsed,
+        )
+    finally:
+        db.close()
 
+
+# ==========================
+# EERR / Analytics
+# ==========================
 
 @app.get("/analytics/income-statement")
-def income_statement(year: int = Query(...), month: int = Query(...)):
-    """
-    Devuelve EERR del mes (ingresos, gastos, margen) + comparativo vs mes anterior
-    y detalle por rubro/kind.
-    """
+def income_statement(
+    year: int = Query(...),
+    month: int = Query(...),
+    current_user: User = Depends(get_current_user),
+):
     db = SessionLocal()
+    try:
+        ym = f"{year:04d}-{month:02d}"
+        base = datetime(year, month, 1)
+        prev_dt = base - timedelta(days=1)
+        ym_prev = f"{prev_dt.year:04d}-{prev_dt.month:02d}"
 
-    ym = f"{year:04d}-{month:02d}"
-    base = datetime(year, month, 1)
-    prev_dt = base - timedelta(days=1)
-    ym_prev = f"{prev_dt.year:04d}-{prev_dt.month:02d}"
+        def period_agg(yyyy_mm: str):
+            rows = (
+                db.query(
+                    Transaction.rubro,
+                    Transaction.kind,
+                    func.sum(Transaction.neto).label("neto"),
+                    func.sum(Transaction.iva).label("iva"),
+                    func.sum(Transaction.total).label("total"),
+                )
+                .filter(
+                    Transaction.user_id == current_user.id,
+                    func.strftime("%Y-%m", Transaction.occurred_on) == yyyy_mm,
+                )
+                .group_by(Transaction.rubro, Transaction.kind)
+                .all()
+            )
+            return [
+                {
+                    "rubro": r[0] or "Sin rubro",
+                    "kind": r[1],
+                    "neto": float(r[2] or 0),
+                    "iva": float(r[3] or 0),
+                    "total": float(r[4] or 0),
+                }
+                for r in rows
+            ]
 
-    def period_agg(yyyy_mm: str):
+        cur = period_agg(ym)
+        prv = period_agg(ym_prev)
+
+        cur_income = sum(x["total"] for x in cur if x["kind"] == "income")
+        cur_exp = sum(x["total"] for x in cur if x["kind"] == "expense")
+        prv_income = sum(x["total"] for x in prv if x["kind"] == "income")
+        prv_exp = sum(x["total"] for x in prv if x["kind"] == "expense")
+
+        purchases_total = sum(
+            x["total"]
+            for x in cur
+            if x["kind"] == "expense" and x["rubro"].lower() in ("mercaderías", "mercaderias")
+        )
+
+        snap = (
+            db.query(StockSnapshot)
+            .filter(
+                StockSnapshot.user_id == current_user.id,
+                StockSnapshot.year == f"{year:04d}",
+                StockSnapshot.month == f"{month:02d}",
+            )
+            .first()
+        )
+
+        if snap:
+            ei = float(snap.initial_stock or 0)
+            ef = float(snap.final_stock or 0)
+            cogs = ei + purchases_total - ef
+            gross_margin = cur_income - cogs
+            gross_margin_pct = (gross_margin / cur_income * 100.0) if cur_income else None
+        else:
+            ei = ef = cogs = gross_margin = gross_margin_pct = None
+
+        summary = {
+            "income": cur_income,
+            "expense": cur_exp,
+            "margin": cur_income - cur_exp,
+            "purchases": purchases_total,
+            "initial_stock": ei,
+            "final_stock": ef,
+            "cogs": cogs,
+            "gross_margin": gross_margin,
+            "gross_margin_pct": gross_margin_pct,
+            "prev_income": prv_income,
+            "prev_expense": prv_exp,
+            "prev_margin": prv_income - prv_exp,
+            "mom_income_pct": ((cur_income - prv_income) / prv_income * 100.0)
+            if prv_income
+            else None,
+            "mom_expense_pct": ((cur_exp - prv_exp) / prv_exp * 100.0)
+            if prv_exp
+            else None,
+            "margin_pct": ((cur_income - cur_exp) / cur_income * 100.0)
+            if cur_income
+            else None,
+        }
+
+        return {
+            "period": ym,
+            "previous": ym_prev,
+            "by_rubro": cur,
+            "summary": summary,
+        }
+    finally:
+        db.close()
+
+
+# ==========================
+# Presupuesto sugerido
+# ==========================
+
+@app.get("/budget/suggest")
+def budget_suggest(
+    year: int = Query(...),
+    month: int = Query(...),
+    window_months: int = 6,
+    current_user: User = Depends(get_current_user),
+):
+    db = SessionLocal()
+    try:
+        target_first = datetime(year, month, 1)
+
+        y = year
+        m = month
+        for _ in range(window_months):
+            m -= 1
+            if m == 0:
+                m = 12
+                y -= 1
+        window_start = datetime(y, m, 1).date()
+        window_end = target_first.date()
+
         rows = (
             db.query(
                 Transaction.rubro,
                 Transaction.kind,
-                func.sum(Transaction.neto).label("neto"),
-                func.sum(Transaction.iva).label("iva"),
                 func.sum(Transaction.total).label("total"),
             )
-            .filter(func.strftime("%Y-%m", Transaction.occurred_on) == yyyy_mm)
+            .filter(
+                Transaction.user_id == current_user.id,
+                Transaction.occurred_on >= window_start,
+                Transaction.occurred_on < window_end,
+            )
             .group_by(Transaction.rubro, Transaction.kind)
             .all()
         )
-        return [
-            {
-                "rubro": r[0] or "Sin rubro",
-                "kind": r[1],
-                "neto": float(r[2] or 0),
-                "iva": float(r[3] or 0),
-                "total": float(r[4] or 0),
-            }
-            for r in rows
-        ]
 
-    cur = period_agg(ym)
-    prv = period_agg(ym_prev)
+        lines = []
+        for rubro, kind, total in rows:
+            total_val = float(total or 0.0)
+            suggested_monthly = (
+                total_val / float(window_months) if window_months > 0 else total_val
+            )
+            lines.append(
+                {
+                    "rubro": rubro or "Sin rubro",
+                    "kind": kind,
+                    "suggested": suggested_monthly,
+                    "monthly": suggested_monthly,
+                    "annual": suggested_monthly * 12.0,
+                }
+            )
 
-    cur_income = sum(x["total"] for x in cur if x["kind"] == "income")
-    cur_exp = sum(x["total"] for x in cur if x["kind"] == "expense")
-    prv_income = sum(x["total"] for x in prv if x["kind"] == "income")
-    prv_exp = sum(x["total"] for x in prv if x["kind"] == "expense")
-
-    summary = {
-        "income": cur_income,
-        "expense": cur_exp,
-        "margin": cur_income - cur_exp,
-        "prev_income": prv_income,
-        "prev_expense": prv_exp,
-        "prev_margin": prv_income - prv_exp,
-        "mom_income_pct": ((cur_income - prv_income) / prv_income * 100.0)
-        if prv_income
-        else None,
-        "mom_expense_pct": ((cur_exp - prv_exp) / prv_exp * 100.0)
-        if prv_exp
-        else None,
-        "margin_pct": ((cur_income - cur_exp) / cur_income * 100.0)
-        if cur_income
-        else None,
-    }
-
-    return {
-        "period": ym,
-        "previous": ym_prev,
-        "by_rubro": cur,
-        "summary": summary,
-    }
+        return {
+            "period": f"{year:04d}-{month:02d}",
+            "window_months": window_months,
+            "from": window_start.isoformat(),
+            "to_exclusive": window_end.isoformat(),
+            "lines": lines,
+        }
+    finally:
+        db.close()
 
 
-@app.get("/budget/suggest")
-def budget_suggest(
-    year: int = Query(...), month: int = Query(...), window_months: int = 6
-):
-    """
-    Sugiere un presupuesto por rubro/tipo usando el promedio de los últimos N meses (default 6).
-    """
-    db = SessionLocal()
-
-    # primer día del mes destino
-    target_first = datetime(year, month, 1)
-
-    # calcular el primer día del mes de inicio de la ventana (6 meses antes)
-    y = year
-    m = month
-    for _ in range(window_months):
-        m -= 1
-        if m == 0:
-            m = 12
-            y -= 1
-    window_start = datetime(y, m, 1).date()  # ej: 2025-05-01
-    window_end = target_first.date()         # excluyente: 2025-11-01
-
-    # Agregado por rubro + kind en la ventana
-    rows = (
-        db.query(
-            Transaction.rubro,
-            Transaction.kind,
-            func.sum(Transaction.total).label("total"),
-        )
-        .filter(
-            Transaction.occurred_on >= window_start,
-            Transaction.occurred_on < window_end,
-        )
-        .group_by(Transaction.rubro, Transaction.kind)
-        .all()
-    )
-
-    lines = []
-    for rubro, kind, total in rows:
-        total_val = float(total or 0.0)
-        suggested_monthly = (
-            total_val / float(window_months) if window_months > 0 else total_val
-        )
-        lines.append(
-            {
-                "rubro": rubro or "Sin rubro",
-                "kind": kind,
-                "suggested": suggested_monthly,      # compatibilidad hacia atrás
-                "monthly": suggested_monthly,        # monto mensual
-                "annual": suggested_monthly * 12.0,  # monto anual
-            }
-        )
-
-    return {
-        "period": f"{year:04d}-{month:02d}",
-        "window_months": window_months,
-        "from": window_start.isoformat(),
-        "to_exclusive": window_end.isoformat(),
-        "lines": lines,
-    }
-
+# ==========================
+# Transacciones manuales
+# ==========================
 
 @app.post("/transactions/manual")
-def create_manual_transaction(payload: ManualTransactionIn):
-    """
-    Carga manual de ingresos/egresos cuando no hay comprobante
-    o cuando el usuario quiere agregar un movimiento a mano.
-    """
+def create_manual_transaction(
+    payload: ManualTransactionIn,
+    current_user: User = Depends(get_current_user),
+):
     db = SessionLocal()
+    try:
+        total = payload.total.quantize(Decimal("0.01"))
+        iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
+        neto = (total - iva).quantize(Decimal("0.01"))
 
-    total = payload.total.quantize(Decimal("0.01"))
-    # Usamos la misma lógica que en el resto del sistema: IVA 22%
-    iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
-    neto = (total - iva).quantize(Decimal("0.01"))
+        trx = Transaction(
+            user_id=current_user.id,
+            kind=payload.kind,
+            occurred_on=payload.date,
+            rubro=payload.rubro,
+            neto=neto,
+            iva=iva,
+            total=total,
+            description=payload.description or "Carga manual",
+            document_id="manual",
+        )
+        db.add(trx)
+        db.commit()
+        db.refresh(trx)
 
-    trx = Transaction(
-        id=None,
-        kind=payload.kind,  # "income" o "expense"
-        occurred_on=payload.date,
-        rubro=payload.rubro,
-        neto=neto,
-        iva=iva,
-        total=total,
-        description=payload.description or "Carga manual",
-        document_id="manual",  # marca que no viene de un documento OCR
-    )
-    db.add(trx)
-    db.commit()
-    db.refresh(trx)
+        return {
+            "id": trx.id,
+            "message": "Transacción manual registrada correctamente",
+        }
+    finally:
+        db.close()
 
-    return {
-        "id": trx.id,
-        "message": "Transacción manual registrada correctamente",
-    }
 
+# ==========================
+# Importación CSV
+# ==========================
 
 @app.post("/transactions/import-csv")
-async def import_transactions_csv(file: UploadFile = File(...)):
-    """
-    Importa movimientos históricos desde un CSV en uno de estos formatos:
-
-    A) Formato detallado (fila a fila):
-       date,kind,rubro,description,total
-
-    B) Formato mensual por columnas:
-       mes,ventas,compras,alquiler,sueldos,...
-    """
+async def import_transactions_csv(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     if not file.filename:
         raise HTTPException(400, "Archivo inválido")
 
     raw = await file.read()
-    # decodificar texto y detectar delimitador (coma o punto y coma)
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = raw.decode("latin-1")
 
-    # detectar delimitador con Sniffer
     try:
         sample = "\n".join(text.splitlines()[:5]) or text
         dialect = csv.Sniffer().sniff(sample)
     except Exception:
-        dialect = csv.excel  # default coma
+        dialect = csv.excel
 
     f = StringIO(text)
     reader = csv.DictReader(f, dialect=dialect)
@@ -523,170 +668,47 @@ async def import_transactions_csv(file: UploadFile = File(...)):
     headers = [h.strip().lower() for h in reader.fieldnames]
 
     db = SessionLocal()
+    try:
+        # Rama A: formato fila a fila
+        if {"date", "kind", "rubro", "total"}.issubset(set(headers)):
+            imported = 0
+            skipped = 0
 
-    # -------- Rama A: formato fila a fila (date,kind,rubro,total) --------
-    if {"date", "kind", "rubro", "total"}.issubset(set(headers)):
-        imported = 0
-        skipped = 0
-
-        for row in reader:
-            try:
-                # Fecha
-                raw_date = (row.get("date") or "").strip()
-                if not raw_date:
-                    raise ValueError("Fecha vacía")
-
-                if "-" in raw_date:
-                    occurred_on = dt.datetime.strptime(raw_date, "%Y-%m-%d").date()
-                elif "/" in raw_date:
-                    occurred_on = dt.datetime.strptime(raw_date, "%d/%m/%Y").date()
-                else:
-                    occurred_on = dt.datetime.fromisoformat(raw_date).date()
-
-                # kind
-                kind = (row.get("kind") or "").strip().lower()
-                if kind not in ("income", "expense"):
-                    raise ValueError("kind inválido")
-
-                # rubro
-                rubro = (row.get("rubro") or "").strip() or "Sin rubro"
-
-                # descripción
-                description = (row.get("description") or "").strip() or "Importado CSV"
-
-                # total
-                total_str = (row.get("total") or "").strip()
-                if not total_str:
-                    raise ValueError("total vacío")
-                total = Decimal(total_str.replace(".", "").replace(",", "."))
-                total = total.quantize(Decimal("0.01"))
-
-                iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
-                neto = (total - iva).quantize(Decimal("0.01"))
-
-            except Exception:
-                skipped += 1
-                continue
-
-            trx = Transaction(
-                id=None,
-                kind=kind,
-                occurred_on=occurred_on,
-                rubro=rubro,
-                neto=neto,
-                iva=iva,
-                total=total,
-                description=description[:240],
-                document_id="import-csv",
-            )
-            db.add(trx)
-            imported += 1
-
-        db.commit()
-        return {
-            "imported": imported,
-            "skipped": skipped,
-            "message": f"Importadas {imported} filas (formato detallado), saltadas {skipped}.",
-        }
-
-    # -------- Rama B: formato mensual por columnas (mes, ventas, compras, ...) --------
-    if "mes" not in headers:
-        raise HTTPException(
-            400,
-            "El CSV no tiene formato reconocido. Se espera 'date,kind,rubro,total' "
-            "o bien 'mes, ventas, compras, ...'.",
-        )
-
-    # mapeo de nombre de mes en español a número
-    month_map = {
-        "enero": 1,
-        "febrero": 2,
-        "marzo": 3,
-        "abril": 4,
-        "mayo": 5,
-        "junio": 6,
-        "julio": 7,
-        "agosto": 8,
-        "setiembre": 9,
-        "septiembre": 9,
-        "octubre": 10,
-        "noviembre": 11,
-        "diciembre": 12,
-    }
-
-    def parse_month(mes_raw: str) -> int:
-        s = mes_raw.strip().lower()
-        if s.isdigit():
-            val = int(s)
-            if 1 <= val <= 12:
-                return val
-        if s in month_map:
-            return month_map[s]
-        raise ValueError(f"Mes inválido: {mes_raw!r}")
-
-    current_year = dt.date.today().year
-
-    imported = 0
-    skipped = 0
-
-    # columnas a ignorar como rubros
-    ignore_cols = {"mes", "año", "anio", ""}
-
-    for row in reader:
-        try:
-            raw_mes = (row.get("mes") or "").strip()
-            if not raw_mes:
-                raise ValueError("Mes vacío")
-
-            month_num = parse_month(raw_mes)
-
-            # permitir columna opcional de año
-            raw_year = (row.get("año") or row.get("anio") or "").strip()
-            if raw_year.isdigit():
-                year = int(raw_year)
-            else:
-                year = current_year  # si no hay año, usamos el año actual
-
-            # último día del mes
-            if month_num == 12:
-                next_month_first = dt.date(year + 1, 1, 1)
-            else:
-                next_month_first = dt.date(year, month_num + 1, 1)
-            occurred_on = next_month_first - dt.timedelta(days=1)
-
-            # recorrer todas las columnas excepto mes/año y vacías
-            for col_name in reader.fieldnames or []:
-                col_key = (col_name or "").strip()
-                col_norm = col_key.lower()
-                if col_norm in ignore_cols:
-                    continue
-
-                val_str = (row.get(col_name) or "").strip()
-                if not val_str:
-                    continue
-
+            for row in reader:
                 try:
-                    total = Decimal(val_str.replace(".", "").replace(",", "."))
+                    raw_date = (row.get("date") or "").strip()
+                    if not raw_date:
+                        raise ValueError("Fecha vacía")
+
+                    if "-" in raw_date:
+                        occurred_on = dt.datetime.strptime(raw_date, "%Y-%m-%d").date()
+                    elif "/" in raw_date:
+                        occurred_on = dt.datetime.strptime(raw_date, "%d/%m/%Y").date()
+                    else:
+                        occurred_on = dt.datetime.fromisoformat(raw_date).date()
+
+                    kind = (row.get("kind") or "").strip().lower()
+                    if kind not in ("income", "expense"):
+                        raise ValueError("kind inválido")
+
+                    rubro = (row.get("rubro") or "").strip() or "Sin rubro"
+                    description = (row.get("description") or "").strip() or "Importado CSV"
+
+                    total_str = (row.get("total") or "").strip()
+                    if not total_str:
+                        raise ValueError("total vacío")
+                    total = Decimal(total_str.replace(".", "").replace(",", "."))
+                    total = total.quantize(Decimal("0.01"))
+
+                    iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
+                    neto = (total - iva).quantize(Decimal("0.01"))
+
                 except Exception:
+                    skipped += 1
                     continue
-
-                if total == 0:
-                    continue
-
-                total = total.quantize(Decimal("0.01"))
-                iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
-                neto = (total - iva).quantize(Decimal("0.01"))
-
-                if col_norm in ("ventas", "ingresos", "ventas totales"):
-                    kind = "income"
-                else:
-                    kind = "expense"
-
-                rubro = col_key or "Sin rubro"
-                description = f"Histórico {raw_mes} - {rubro}"
 
                 trx = Transaction(
-                    id=None,
+                    user_id=current_user.id,
                     kind=kind,
                     occurred_on=occurred_on,
                     rubro=rubro,
@@ -699,14 +721,126 @@ async def import_transactions_csv(file: UploadFile = File(...)):
                 db.add(trx)
                 imported += 1
 
-        except Exception:
-            skipped += 1
-            continue
+            db.commit()
+            return {
+                "imported": imported,
+                "skipped": skipped,
+                "message": f"Importadas {imported} filas (formato detallado), saltadas {skipped}.",
+            }
 
-    db.commit()
+        # Rama B: formato mensual
+        if "mes" not in headers:
+            raise HTTPException(
+                400,
+                "El CSV no tiene formato reconocido. Se espera 'date,kind,rubro,total' "
+                "o bien 'mes, ventas, compras, ...'.",
+            )
 
-    return {
-        "imported": imported,
-        "skipped": skipped,
-        "message": f"Importadas {imported} filas (formato mensual), meses con error {skipped}.",
-    }
+        month_map = {
+            "enero": 1,
+            "febrero": 2,
+            "marzo": 3,
+            "abril": 4,
+            "mayo": 5,
+            "junio": 6,
+            "julio": 7,
+            "agosto": 8,
+            "setiembre": 9,
+            "septiembre": 9,
+            "octubre": 10,
+            "noviembre": 11,
+            "diciembre": 12,
+        }
+
+        def parse_month(mes_raw: str) -> int:
+            s = mes_raw.strip().lower()
+            if s.isdigit():
+                val = int(s)
+                if 1 <= val <= 12:
+                    return val
+            if s in month_map:
+                return month_map[s]
+            raise ValueError(f"Mes inválido: {mes_raw!r}")
+
+        current_year = dt.date.today().year
+        imported = 0
+        skipped = 0
+        ignore_cols = {"mes", "año", "anio", ""}
+
+        for row in reader:
+            try:
+                raw_mes = (row.get("mes") or "").strip()
+                if not raw_mes:
+                    raise ValueError("Mes vacío")
+
+                month_num = parse_month(raw_mes)
+
+                raw_year = (row.get("año") or row.get("anio") or "").strip()
+                if raw_year.isdigit():
+                    year_val = int(raw_year)
+                else:
+                    year_val = current_year
+
+                if month_num == 12:
+                    next_month_first = dt.date(year_val + 1, 1, 1)
+                else:
+                    next_month_first = dt.date(year_val, month_num + 1, 1)
+                occurred_on = next_month_first - dt.timedelta(days=1)
+
+                for col_name in reader.fieldnames or []:
+                    col_key = (col_name or "").strip()
+                    col_norm = col_key.lower()
+                    if col_norm in ignore_cols:
+                        continue
+
+                    val_str = (row.get(col_name) or "").strip()
+                    if not val_str:
+                        continue
+
+                    try:
+                        total = Decimal(val_str.replace(".", "").replace(",", "."))
+                    except Exception:
+                        continue
+
+                    if total == 0:
+                        continue
+
+                    total = total.quantize(Decimal("0.01"))
+                    iva = (total * Decimal("0.22")).quantize(Decimal("0.01"))
+                    neto = (total - iva).quantize(Decimal("0.01"))
+
+                    if col_norm in ("ventas", "ingresos", "ventas totales"):
+                        kind = "income"
+                    else:
+                        kind = "expense"
+
+                    rubro = col_key or "Sin rubro"
+                    description = f"Histórico {raw_mes} - {rubro}"
+
+                    trx = Transaction(
+                        user_id=current_user.id,
+                        kind=kind,
+                        occurred_on=occurred_on,
+                        rubro=rubro,
+                        neto=neto,
+                        iva=iva,
+                        total=total,
+                        description=description[:240],
+                        document_id="import-csv",
+                    )
+                    db.add(trx)
+                    imported += 1
+
+            except Exception:
+                skipped += 1
+                continue
+
+        db.commit()
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "message": f"Importadas {imported} filas (formato mensual), meses con error {skipped}.",
+        }
+    finally:
+        db.close()
+

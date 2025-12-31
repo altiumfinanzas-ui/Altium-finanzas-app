@@ -45,6 +45,24 @@ const monthNames = [
   "Diciembre",
 ];
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://altium-finanzas-app.onrender.com";
+
+function authFetch(input: RequestInfo, init: RequestInit = {}) {
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("altium_token")
+      : null;
+
+  const headers = new Headers(init.headers || {});
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  return fetch(input, { ...init, headers });
+}
+
 function formatMoney(n: number) {
   return n.toLocaleString("es-UY", { minimumFractionDigits: 2 });
 }
@@ -65,9 +83,18 @@ export default function InformeMensual() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        `http://127.0.0.1:8000/analytics/income-statement?year=${y}&month=${m}`
+      const res = await authFetch(
+        `${API_BASE}/analytics/income-statement?year=${y}&month=${m}`
       );
+
+      if (res.status === 401) {
+        setError("Tu sesión expiró. Volvé a iniciar sesión.");
+        // opcional:
+        // window.location.href = "/login";
+        setData(null);
+        return;
+      }
+
       if (!res.ok) {
         throw new Error(`Error HTTP ${res.status}`);
       }
@@ -346,7 +373,7 @@ export default function InformeMensual() {
       {loading && <p>Generando informe...</p>}
       {error && <p style={{ color: "red" }}>{error}</p>}
 
-      {data && !loading && (
+      {data && !loading && !error && (
         <>
           <p style={{ marginBottom: "0.75rem" }}>
             Estás viendo el informe del período{" "}
