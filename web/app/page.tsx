@@ -25,12 +25,19 @@ function authFetch(input: RequestInfo, init: RequestInit = {}) {
       : null;
 
   const headers = new Headers(init.headers || {});
+
+  // ✅ Si mandamos FormData, NO seteamos Content-Type
+  if (init.body instanceof FormData) {
+    headers.delete("Content-Type");
+  }
+
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
   return fetch(input, { ...init, headers });
 }
+
 
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
@@ -86,70 +93,71 @@ export default function Home() {
     if (!e.target.files) return;
     setFiles(Array.from(e.target.files));
   };
+const upload = async () => {
+  if (!files.length) return;
 
-  const upload = async () => {
-    if (!files.length) return;
-    if (!isTrialActive) {
-      setStatus(
-        "Tu período de prueba test terminó. Podés seguir viendo tus datos, pero para cargar nuevos archivos necesitás pasar al plan PRO."
-      );
-      return;
-    }
+  if (!isTrialActive) {
+    setStatus(
+      "Tu período de prueba terminó. Podés seguir viendo tus datos, pero para cargar nuevos archivos necesitás pasar al plan PRO."
+    );
+    return;
+  }
 
-    setStatus("Subiendo archivos...");
-    const resultados: string[] = [];
+  setStatus("Subiendo archivos...");
+  const resultados: string[] = [];
 
-    for (const f of files) {
-      const fd = new FormData();
-      fd.append("file", f);
+  for (const f of files) {
+    const lowerName = f.name.toLowerCase();
+    const fd = new FormData();
+    fd.append("file", f);
 
-      const lowerName = f.name.toLowerCase();
+    try {
+      let res: Response;
 
-      try {
-        // Si es CSV -> lo mandamos al importador histórico
-        if (lowerName.endsWith(".csv")) {
-          const res = await authFetch(
-            `${API_BASE}/transactions/import-csv`,
-            {
-              method: "POST",
-              body: fd,
-            }
-          );
-
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status}`);
-          }
-
-          const json = await res.json();
-          resultados.push(
-            `Histórico importado desde ${f.name}: ${json.message} (importadas ${json.imported}, saltadas ${json.skipped})`
-          );
-        } else {
-          // Si NO es CSV -> va al OCR normal de comprobantes
-          const res = await authFetch(`${API_BASE}/documents/upload`, {
-            method: "POST",
-            body: fd,
-          });
-
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status}`);
-          }
-
-          const json = await res.json();
-          resultados.push(
-            `Subido: ${f.name} → doc ${json.document_id} | OCR: ${json.ocr_preview}`
-          );
-        }
-      } catch (err) {
-        console.error(err);
-        resultados.push(`Error subiendo ${f.name}`);
+      if (lowerName.endsWith(".csv")) {
+        res = await authFetch(`${API_BASE}/transactions/import-csv`, {
+          method: "POST",
+          body: fd,
+        });
+      } else {
+        res = await authFetch(`${API_BASE}/documents/upload`, {
+          method: "POST",
+          body: fd,
+        });
       }
+
+      const text = await res.text();
+
+      if (!res.ok) {
+        resultados.push(`❌ Error subiendo ${f.name}: HTTP ${res.status} - ${text}`);
+        continue;
+      }
+
+      let json: any = {};
+      try {
+        json = JSON.parse(text);
+      } catch {}
+
+      if (lowerName.endsWith(".csv")) {
+        resultados.push(
+          `✅ Histórico importado desde ${f.name}: ${json.message ?? "OK"} (importadas ${json.imported ?? "?"}, saltadas ${json.skipped ?? "?"})`
+        );
+      } else {
+        resultados.push(
+          `✅ Subido ${f.name}${json.document_id ? ` → doc ${json.document_id}` : ""}`
+        );
+      }
+    } catch (err: any) {
+      resultados.push(`❌ Error subiendo ${f.name}: ${err?.message ?? err}`);
     }
+  }
 
-    setStatus(resultados.join("\n"));
-  };
+  setStatus(resultados.join("\n"));
+};
 
-  const scrollToApp = () => {
+    
+
+const scrollToApp = () => {
     const el = document.getElementById("app-panel");
     if (el) {
       el.scrollIntoView({ behavior: "smooth" });
