@@ -2,13 +2,12 @@
 
 import { useState } from "react";
 
-const API_BASE =
-  "https://altium-finanzas-app.onrender.com";
+const API_BASE = "https://altium-finanzas-app.onrender.com";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("altiumfinanzas@altiumfinanzas.com");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"login" | "register">("register");
+  const [mode, setMode] = useState<"login" | "register">("login"); // 👈 arrancá en login
   const [status, setStatus] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -16,51 +15,49 @@ export default function LoginPage() {
     setStatus("Procesando...");
 
     try {
-      console.log("Llamando a:", `${API_BASE}/auth/${mode}`);
-      const res = await fetch(
-        `${API_BASE}/auth/${mode === "login" ? "login" : "register"}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        }
-      );
+      const url = `${API_BASE}/auth/${mode === "login" ? "login" : "register"}`;
+      console.log("Llamando a:", url);
+
+      // ✅ Volvemos a JSON para login y register (como te funcionaba antes)
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
 
       const text = await res.text();
+      console.log("AUTH STATUS:", res.status);
+      console.log("AUTH RAW RESPONSE:", text);
+
       let data: any = {};
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        console.warn("Respuesta no JSON:", text);
+        // si no es JSON, queda {}
       }
 
       if (!res.ok) {
-        console.error("Respuesta de error:", res.status, text);
-        setStatus(
-          data.detail ||
-            `Error ${res.status}: ${
-              text || "Error al procesar la solicitud"
-            }`
-        );
+        setStatus(data.detail || data.message || `Error ${res.status}`);
         return;
       }
 
-      // Registro OK
+      // ✅ Si venís de register, pasamos a login
       if (mode === "register") {
-        setStatus("Usuario registrado, ahora inicia sesión.");
+        setStatus("Usuario registrado. Ahora iniciá sesión.");
         setMode("login");
         return;
       }
 
-      // Login OK
-      if (!data.access_token) {
+      // ✅ Login OK: guardar token (cubre varios nombres)
+      const token = data.access_token || data.token || data.jwt;
+      if (!token) {
         console.log("Respuesta inesperada de login:", data);
-        setStatus("Respuesta inesperada del servidor.");
+        setStatus("Login OK pero no vino token. Revisar backend.");
         return;
       }
 
-      localStorage.setItem("altium_token", data.access_token);
-      setStatus("Login correcto, entrando a la app...");
+      localStorage.setItem("altium_token", token);
+      setStatus("Login correcto, entrando...");
       window.location.href = "/";
     } catch (err: any) {
       console.error("ERROR FETCH:", err);
@@ -94,9 +91,7 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: "12px" }}>
-            <label style={{ display: "block", marginBottom: "4px" }}>
-              Email
-            </label>
+            <label style={{ display: "block", marginBottom: "4px" }}>Email</label>
             <input
               type="email"
               value={email}

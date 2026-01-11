@@ -8,4 +8,5 @@ email-validator
 pillow
 pytesseract
 pymupdf
+psycopg2-binary
 

@@ -3,8 +3,22 @@
 import { useEffect, useState } from "react";
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  "https://altium-finanzas-app.onrender.com";
+  process.env.NEXT_PUBLIC_API_URL || "https://altium-finanzas-app.onrender.com";
+
+function authFetch(input: RequestInfo, init: RequestInit = {}) {
+  const token =
+    typeof window !== "undefined" ? localStorage.getItem("altium_token") : null;
+
+  const headers = new Headers(init.headers || {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  // Si NO es FormData, seteamos JSON por defecto
+  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  return fetch(input, { ...init, headers });
+}
 
 type RubroRow = {
   rubro: string;
@@ -19,7 +33,6 @@ type Summary = {
   expense: number;
   margin: number;
 
-  // Nuevos campos para costo de ventas
   purchases?: number | null;
   initial_stock?: number | null;
   final_stock?: number | null;
@@ -79,34 +92,61 @@ export default function EstadoResultados() {
 
   const periodLabel = `${month.toString().padStart(2, "0")}/${year}`;
 
+  const getToken = () =>
+    typeof window !== "undefined" ? localStorage.getItem("altium_token") : null;
+
+  const redirectToLogin = () => {
+    try {
+      localStorage.removeItem("altium_token");
+    } catch {}
+    window.location.href = "/login";
+  };
+
   const loadAll = async () => {
+    const token = getToken();
+    if (!token) {
+      // No hay sesión: no dispares requests protegidos.
+      redirectToLogin();
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setStockMessage("");
 
     try {
-      // 1) EERR
       const qs = `year=${year}&month=${month}`;
-      const res = await fetch(
-        `${API_BASE}/analytics/income-statement?${qs}`
-      );
+
+      // 1) EERR (con token)
+      const res = await authFetch(`${API_BASE}/analytics/income-statement?${qs}`);
+
+      if (res.status === 401) {
+        redirectToLogin();
+        return;
+      }
+
       if (!res.ok) {
         const text = await res.text();
         throw new Error(
           `Error al obtener estado de resultados: ${res.status} - ${text}`
         );
       }
+
       const json: IncomeStatementResponse = await res.json();
       setData(json);
 
-      // 2) Stock (EI y EF) para completar inputs
-      const resStock = await fetch(`${API_BASE}/stock?${qs}`);
+      // 2) Stock (con token)
+      const resStock = await authFetch(`${API_BASE}/stock?${qs}`);
+
+      if (resStock.status === 401) {
+        redirectToLogin();
+        return;
+      }
+
       if (resStock.ok) {
         const stockJson: StockResponse = await resStock.json();
         setStockInitial(
-          stockJson.initial_stock !== null
-            ? String(stockJson.initial_stock)
-            : ""
+          stockJson.initial_stock !== null ? String(stockJson.initial_stock) : ""
         );
         setStockFinal(
           stockJson.final_stock !== null ? String(stockJson.final_stock) : ""
@@ -129,6 +169,12 @@ export default function EstadoResultados() {
   }, [year, month]);
 
   const handleSaveStock = async () => {
+    const token = getToken();
+    if (!token) {
+      redirectToLogin();
+      return;
+    }
+
     setLoadingStock(true);
     setStockMessage("");
     setError(null);
@@ -139,19 +185,23 @@ export default function EstadoResultados() {
 
       if (Number.isNaN(initial) || Number.isNaN(final)) {
         setStockMessage("Montos inválidos. Usa solo números.");
-        setLoadingStock(false);
         return;
       }
 
       const qs = `year=${year}&month=${month}`;
-      const res = await fetch(`${API_BASE}/stock?${qs}`, {
+
+      const res = await authFetch(`${API_BASE}/stock?${qs}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           initial_stock: initial,
           final_stock: final,
         }),
       });
+
+      if (res.status === 401) {
+        redirectToLogin();
+        return;
+      }
 
       const text = await res.text();
       let json: any = {};
@@ -171,7 +221,6 @@ export default function EstadoResultados() {
         );
       } else {
         setStockMessage("Stock actualizado. Recalculando estado de resultados…");
-        // Volvemos a cargar el EERR para que se actualice Costo de ventas
         await loadAll();
         setStockMessage("Stock actualizado correctamente.");
       }
@@ -212,6 +261,7 @@ export default function EstadoResultados() {
             style={{ padding: "4px 8px", width: "100px" }}
           />
         </div>
+
         <div>
           <label style={{ display: "block", fontSize: "0.85rem" }}>Mes</label>
           <input
@@ -225,6 +275,7 @@ export default function EstadoResultados() {
             style={{ padding: "4px 8px", width: "80px" }}
           />
         </div>
+
         <button
           type="button"
           onClick={loadAll}
@@ -244,9 +295,7 @@ export default function EstadoResultados() {
       </div>
 
       {loading && <p>Cargando estado de resultados…</p>}
-      {error && (
-        <p style={{ color: "red", marginBottom: "12px" }}>{error}</p>
-      )}
+      {error && <p style={{ color: "red", marginBottom: "12px" }}>{error}</p>}
 
       {/* Bloque de stock inicial / final */}
       <div
@@ -258,9 +307,8 @@ export default function EstadoResultados() {
           background: "#f9fafb",
         }}
       >
-        <h3 style={{ marginTop: 0, marginBottom: "8px" }}>
-          Stock de mercaderías
-        </h3>
+        <h3 style={{ marginTop: 0, marginBottom: "8px" }}>Stock de mercaderías</h3>
+
         <p style={{ marginTop: 0, fontSize: "0.85rem", color: "#555" }}>
           Para calcular el <strong>costo de ventas</strong> se usa la fórmula:
           <br />
@@ -287,6 +335,7 @@ export default function EstadoResultados() {
               style={{ padding: "4px 8px", minWidth: "140px" }}
             />
           </div>
+
           <div>
             <label style={{ display: "block", fontSize: "0.85rem" }}>
               Existencia final
@@ -299,6 +348,7 @@ export default function EstadoResultados() {
               style={{ padding: "4px 8px", minWidth: "140px" }}
             />
           </div>
+
           <button
             type="button"
             onClick={handleSaveStock}
@@ -319,9 +369,7 @@ export default function EstadoResultados() {
         </div>
 
         {stockMessage && (
-          <p style={{ marginTop: "8px", fontSize: "0.85rem" }}>
-            {stockMessage}
-          </p>
+          <p style={{ marginTop: "8px", fontSize: "0.85rem" }}>{stockMessage}</p>
         )}
       </div>
 
@@ -335,89 +383,43 @@ export default function EstadoResultados() {
             marginBottom: "16px",
           }}
         >
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
             <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Ventas</div>
             <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
               {formatCurrency(summary.income)}
             </div>
           </div>
 
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
-            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-              Compras (Mercaderías)
-            </div>
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Compras (Mercaderías)</div>
             <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
               {formatCurrency(summary.purchases ?? null)}
             </div>
           </div>
 
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
-            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-              Existencia inicial
-            </div>
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Existencia inicial</div>
             <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
               {formatCurrency(summary.initial_stock ?? null)}
             </div>
           </div>
 
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
-            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-              Existencia final
-            </div>
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Existencia final</div>
             <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
               {formatCurrency(summary.final_stock ?? null)}
             </div>
           </div>
 
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
-            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-              Costo de ventas
-            </div>
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Costo de ventas</div>
             <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
               {formatCurrency(summary.cogs ?? null)}
             </div>
           </div>
 
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
-            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-              Resultado bruto
-            </div>
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Resultado bruto</div>
             <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
               {formatCurrency(summary.gross_margin ?? null)}
             </div>
@@ -426,28 +428,14 @@ export default function EstadoResultados() {
             </div>
           </div>
 
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
-            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-              Gastos totales
-            </div>
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Gastos totales</div>
             <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
               {formatCurrency(summary.expense)}
             </div>
           </div>
 
-          <div
-            style={{
-              borderRadius: "8px",
-              border: "1px solid #e5e7eb",
-              padding: "10px",
-            }}
-          >
+          <div style={{ borderRadius: "8px", border: "1px solid #e5e7eb", padding: "10px" }}>
             <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>
               Resultado neto (Ingresos - Gastos)
             </div>
@@ -475,49 +463,19 @@ export default function EstadoResultados() {
           >
             <thead>
               <tr>
-                <th
-                  style={{
-                    textAlign: "left",
-                    borderBottom: "1px solid #e5e7eb",
-                    padding: "4px",
-                  }}
-                >
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "4px" }}>
                   Rubro
                 </th>
-                <th
-                  style={{
-                    textAlign: "left",
-                    borderBottom: "1px solid #e5e7eb",
-                    padding: "4px",
-                  }}
-                >
+                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: "4px" }}>
                   Tipo
                 </th>
-                <th
-                  style={{
-                    textAlign: "right",
-                    borderBottom: "1px solid #e5e7eb",
-                    padding: "4px",
-                  }}
-                >
+                <th style={{ textAlign: "right", borderBottom: "1px solid #e5e7eb", padding: "4px" }}>
                   Neto
                 </th>
-                <th
-                  style={{
-                    textAlign: "right",
-                    borderBottom: "1px solid #e5e7eb",
-                    padding: "4px",
-                  }}
-                >
+                <th style={{ textAlign: "right", borderBottom: "1px solid #e5e7eb", padding: "4px" }}>
                   IVA
                 </th>
-                <th
-                  style={{
-                    textAlign: "right",
-                    borderBottom: "1px solid #e5e7eb",
-                    padding: "4px",
-                  }}
-                >
+                <th style={{ textAlign: "right", borderBottom: "1px solid #e5e7eb", padding: "4px" }}>
                   Total
                 </th>
               </tr>
@@ -525,51 +483,24 @@ export default function EstadoResultados() {
             <tbody>
               {data.by_rubro.map((row, idx) => (
                 <tr key={idx}>
-                  <td
-                    style={{
-                      borderBottom: "1px solid #f3f4f6",
-                      padding: "4px",
-                    }}
-                  >
+                  <td style={{ borderBottom: "1px solid #f3f4f6", padding: "4px" }}>
                     {row.rubro}
                   </td>
-                  <td
-                    style={{
-                      borderBottom: "1px solid #f3f4f6",
-                      padding: "4px",
-                    }}
-                  >
+                  <td style={{ borderBottom: "1px solid #f3f4f6", padding: "4px" }}>
                     {row.kind === "income" ? "Ingreso" : "Gasto"}
                   </td>
-                  <td
-                    style={{
-                      borderBottom: "1px solid #f3f4f6",
-                      padding: "4px",
-                      textAlign: "right",
-                    }}
-                  >
+                  <td style={{ borderBottom: "1px solid #f3f4f6", padding: "4px", textAlign: "right" }}>
                     {formatCurrency(row.neto)}
                   </td>
-                  <td
-                    style={{
-                      borderBottom: "1px solid #f3f4f6",
-                      padding: "4px",
-                      textAlign: "right",
-                    }}
-                  >
+                  <td style={{ borderBottom: "1px solid #f3f4f6", padding: "4px", textAlign: "right" }}>
                     {formatCurrency(row.iva)}
                   </td>
-                  <td
-                    style={{
-                      borderBottom: "1px solid #f3f4f6",
-                      padding: "4px",
-                      textAlign: "right",
-                    }}
-                  >
+                  <td style={{ borderBottom: "1px solid #f3f4f6", padding: "4px", textAlign: "right" }}>
                     {formatCurrency(row.total)}
                   </td>
                 </tr>
               ))}
+
               {data.by_rubro.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ padding: "8px", textAlign: "center" }}>
@@ -584,4 +515,3 @@ export default function EstadoResultados() {
     </div>
   );
 }
-

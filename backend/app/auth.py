@@ -1,17 +1,20 @@
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from typing import Optional
 import hashlib
+import os
 
 from .db import SessionLocal, User
 
 router = APIRouter()
 
-# ⚠️ En producción cambiá esto por algo largo y privado
-SECRET_KEY = "CAMBIA_ESTE_SECRETO_POR_ALGO_MAS_LARGO_Y_SEGURO"
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY no configurada")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
@@ -29,7 +32,6 @@ class UserLogin(BaseModel):
 
 
 def get_password_hash(password: str) -> str:
-    # Hash simple con SHA256 (para demo; en producción usar bcrypt/argon2)
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
@@ -39,7 +41,9 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -72,27 +76,59 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
         db.close()
 
 
-@router.post("/register")
-def register(user: UserCreate):
+def get_current_user_flexible(
+    token: str = Depends(oauth2_scheme),
+    access_token: Optional[str] = Query(default=None),
+) -> User:
     """
-    Registra un nuevo usuario en la base de datos.
-    - email único
-    - password hasheada
+    Permite autenticar por header (Authorization: Bearer) o por query (?access_token=...).
+    PARCHE TEMPORAL para requests del frontend que salen sin Authorization.
     """
+    if access_token:
+        token = access_token
+    # llamamos a la validación normal
+    return jwt_user_from_token(token)
+
+
+def jwt_user_from_token(token: str) -> User:
+    """
+    Helper para reutilizar la lógica de get_current_user sin Depends.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="No se pudo validar las credenciales",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
     db = SessionLocal()
     try:
-        # ¿ya existe un usuario con ese email?
+        user = db.query(User).filter(User.email == email).first()
+        if user is None or not user.is_active:
+            raise credentials_exception
+        return user
+    finally:
+        db.close()
+
+
+@router.post("/register")
+def register(user: UserCreate):
+    db = SessionLocal()
+    try:
         existing = db.query(User).filter(User.email == user.email).first()
         if existing:
             raise HTTPException(status_code=400, detail="El usuario ya existe")
 
-        db_user = User(
-            email=user.email,
-            password_hash=get_password_hash(user.password),
-        )
+        db_user = User(email=user.email, password_hash=get_password_hash(user.password))
         db.add(db_user)
         db.commit()
-
         return {"message": "Usuario registrado correctamente"}
     finally:
         db.close()
@@ -100,10 +136,6 @@ def register(user: UserCreate):
 
 @router.post("/login")
 def login(user: UserLogin):
-    """
-    Login contra la tabla users.
-    Devuelve un access_token (JWT) si las credenciales son válidas.
-    """
     db = SessionLocal()
     try:
         db_user = db.query(User).filter(User.email == user.email).first()
@@ -117,3 +149,4 @@ def login(user: UserLogin):
         return {"access_token": access_token, "token_type": "bearer"}
     finally:
         db.close()
+

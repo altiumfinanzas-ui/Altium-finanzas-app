@@ -4,7 +4,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .auth import router as auth_router, get_current_user
+from .auth import router as auth_router, get_current_user, get_current_user_flexible
+
 from .db import (
     init_db,
     SessionLocal,
@@ -177,14 +178,6 @@ os.makedirs(STORAGE_PATH, exist_ok=True)
 
 app = FastAPI(title="Altium Finanzas API")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
@@ -427,7 +420,7 @@ async def upload_document(
 def income_statement(
     year: int = Query(...),
     month: int = Query(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_flexible),
 ):
     db = SessionLocal()
     try:

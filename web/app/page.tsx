@@ -17,27 +17,21 @@ const API_BASE =
 const TRIAL_DAYS = 60;
 const TRIAL_KEY = "altium_trial_start";
 
-// Helper para usar siempre el token del login
+// ✅ Helper para usar siempre el token del login (y soportar FormData)
 function authFetch(input: RequestInfo, init: RequestInit = {}) {
   const token =
-    typeof window !== "undefined"
-      ? localStorage.getItem("altium_token")
-      : null;
+    typeof window !== "undefined" ? localStorage.getItem("altium_token") : null;
 
   const headers = new Headers(init.headers || {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  // ✅ Si mandamos FormData, NO seteamos Content-Type
-  if (init.body instanceof FormData) {
-    headers.delete("Content-Type");
-  }
-
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  // ✅ Si NO es FormData, seteamos JSON por defecto
+  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
   return fetch(input, { ...init, headers });
 }
-
 
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
@@ -93,75 +87,76 @@ export default function Home() {
     if (!e.target.files) return;
     setFiles(Array.from(e.target.files));
   };
-const upload = async () => {
-  if (!files.length) return;
 
-  if (!isTrialActive) {
-    setStatus(
-      "Tu período de prueba terminó. Podés seguir viendo tus datos, pero para cargar nuevos archivos necesitás pasar al plan PRO."
-    );
-    return;
-  }
+  const upload = async () => {
+    if (!files.length) return;
 
-  setStatus("Subiendo archivos...");
-  const resultados: string[] = [];
+    if (!isTrialActive) {
+      setStatus(
+        "Tu período de prueba terminó. Podés seguir viendo tus datos, pero para cargar nuevos archivos necesitás pasar al plan PRO."
+      );
+      return;
+    }
 
-  for (const f of files) {
-    const lowerName = f.name.toLowerCase();
-    const fd = new FormData();
-    fd.append("file", f);
+    setStatus("Subiendo archivos...");
+    const resultados: string[] = [];
 
-    try {
-      let res: Response;
+    for (const f of files) {
+      const lowerName = f.name.toLowerCase();
+      const fd = new FormData();
+      fd.append("file", f);
 
-      if (lowerName.endsWith(".csv")) {
-        res = await authFetch(`${API_BASE}/transactions/import-csv`, {
-          method: "POST",
-          body: fd,
-        });
-      } else {
-        res = await authFetch(`${API_BASE}/documents/upload`, {
-          method: "POST",
-          body: fd,
-        });
-      }
-
-      const text = await res.text();
-
-      if (!res.ok) {
-        resultados.push(`❌ Error subiendo ${f.name}: HTTP ${res.status} - ${text}`);
-        continue;
-      }
-
-      let json: any = {};
       try {
-        json = JSON.parse(text);
-      } catch {}
+        let res: Response;
 
-      if (lowerName.endsWith(".csv")) {
-        resultados.push(
-          `✅ Histórico importado desde ${f.name}: ${json.message ?? "OK"} (importadas ${json.imported ?? "?"}, saltadas ${json.skipped ?? "?"})`
-        );
-      } else {
-        resultados.push(
-          `✅ Subido ${f.name}${json.document_id ? ` → doc ${json.document_id}` : ""}`
-        );
+        if (lowerName.endsWith(".csv")) {
+          res = await authFetch(`${API_BASE}/transactions/import-csv`, {
+            method: "POST",
+            body: fd,
+          });
+        } else {
+          res = await authFetch(`${API_BASE}/documents/upload`, {
+            method: "POST",
+            body: fd,
+          });
+        }
+
+        const text = await res.text();
+
+        if (!res.ok) {
+          resultados.push(
+            `❌ Error subiendo ${f.name}: HTTP ${res.status} - ${text}`
+          );
+          continue;
+        }
+
+        let json: any = {};
+        try {
+          json = JSON.parse(text);
+        } catch {}
+
+        if (lowerName.endsWith(".csv")) {
+          resultados.push(
+            `✅ Histórico importado desde ${f.name}: ${json.message ?? "OK"} (importadas ${
+              json.imported ?? "?"
+            }, saltadas ${json.skipped ?? "?"})`
+          );
+        } else {
+          resultados.push(
+            `✅ Subido ${f.name}${json.document_id ? ` → doc ${json.document_id}` : ""}`
+          );
+        }
+      } catch (err: any) {
+        resultados.push(`❌ Error subiendo ${f.name}: ${err?.message ?? err}`);
       }
-    } catch (err: any) {
-      resultados.push(`❌ Error subiendo ${f.name}: ${err?.message ?? err}`);
     }
-  }
 
-  setStatus(resultados.join("\n"));
-};
+    setStatus(resultados.join("\n"));
+  };
 
-    
-
-const scrollToApp = () => {
+  const scrollToApp = () => {
     const el = document.getElementById("app-panel");
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth" });
-    }
+    if (el) el.scrollIntoView({ behavior: "smooth" });
   };
 
   const canUpload = isTrialActive && files.length > 0;
@@ -424,8 +419,7 @@ const scrollToApp = () => {
               style={{
                 padding: "0.5rem 1rem",
                 borderRadius: 4,
-                border:
-                  tab === "estado" ? "2px solid black" : "1px solid #ccc",
+                border: tab === "estado" ? "2px solid black" : "1px solid #ccc",
               }}
             >
               Estado de Resultados
@@ -448,8 +442,7 @@ const scrollToApp = () => {
               style={{
                 padding: "0.5rem 1rem",
                 borderRadius: 4,
-                border:
-                  tab === "flujo" ? "2px solid black" : "1px solid #ccc",
+                border: tab === "flujo" ? "2px solid black" : "1px solid #ccc",
               }}
             >
               Flujo de Caja
@@ -460,8 +453,7 @@ const scrollToApp = () => {
               style={{
                 padding: "0.5rem 1rem",
                 borderRadius: 4,
-                border:
-                  tab === "manual" ? "2px solid black" : "1px solid #ccc",
+                border: tab === "manual" ? "2px solid black" : "1px solid #ccc",
               }}
             >
               Carga manual
@@ -589,4 +581,3 @@ const scrollToApp = () => {
     </main>
   );
 }
-

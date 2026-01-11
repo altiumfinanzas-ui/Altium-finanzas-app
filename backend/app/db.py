@@ -16,15 +16,19 @@ import uuid
 # Ruta de la base de datos SQLite
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "..", "db.sqlite")
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+if DATABASE_URL:
+    # Render a veces da "postgres://" en algunos lados; SQLAlchemy quiere "postgresql://"
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(
+    DATABASE_URL or "sqlite:///./altium.db",
+    connect_args={"check_same_thread": False} if not DATABASE_URL else {},
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
-
-def init_db():
-    Base.metadata.create_all(engine)
 
 
 class User(Base):
