@@ -6,7 +6,7 @@ from decimal import Decimal
 from datetime import date, datetime, timedelta
 from sqlalchemy import func
 
-from db import init_db, SessionLocal, Transaction, Stock  # 👈 ajustá si tu db.py está en otro path
+from db import SessionLocal, Transaction, Stock  # 👈 ajustá si tu db.py está en otro path
 
 # ===============================
 # App
@@ -24,7 +24,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup():
-    init_db()
+    
 
 # ===============================
 # MODELOS
