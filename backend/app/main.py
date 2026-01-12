@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from .auth import router as auth_router, get_current_user, get_current_user_flexible
 
 from .db import (
-    init_db,
+
     SessionLocal,
     User,
     Document,

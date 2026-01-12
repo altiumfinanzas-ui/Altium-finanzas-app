@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import FetchPatch from "./fetchPatch";
+
 import EstadoResultados from "../components/EstadoResultados";
 import Presupuesto from "../components/Presupuesto";
 import FlujoCaja from "../components/FlujoCaja";
@@ -11,8 +13,7 @@ type TabKey = "estado" | "presupuesto" | "flujo" | "manual" | "informe";
 
 // API apuntando a Render (o env var)
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  "https://altium-finanzas-app.onrender.com";
+  process.env.NEXT_PUBLIC_API_URL || "https://altium-finanzas-app.onrender.com";
 
 const TRIAL_DAYS = 60;
 const TRIAL_KEY = "altium_trial_start";
@@ -143,7 +144,9 @@ export default function Home() {
           );
         } else {
           resultados.push(
-            `✅ Subido ${f.name}${json.document_id ? ` → doc ${json.document_id}` : ""}`
+            `✅ Subido ${f.name}${
+              json.document_id ? ` → doc ${json.document_id}` : ""
+            }`
           );
         }
       } catch (err: any) {
@@ -164,6 +167,7 @@ export default function Home() {
   if (checkingAuth) {
     return (
       <main style={{ padding: "16px" }}>
+        <FetchPatch />
         <p>Comprobando sesión...</p>
       </main>
     );
@@ -171,6 +175,8 @@ export default function Home() {
 
   return (
     <main style={{ padding: "1.5rem", maxWidth: 1000, margin: "0 auto" }}>
+      <FetchPatch />
+
       {/* BANNER DE PRUEBA */}
       <div
         style={{
@@ -197,16 +203,16 @@ export default function Home() {
             está realmente tu negocio.
             <br />
             <br />
-            Cuando termine la prueba vas a poder seguir entrando a mirar tus datos.
-            Para seguir cargando nueva información podés pasarte al{" "}
+            Cuando termine la prueba vas a poder seguir entrando a mirar tus
+            datos. Para seguir cargando nueva información podés pasarte al{" "}
             <strong>Plan PRO</strong>.
           </>
         ) : (
           <>
             <strong>Tu prueba gratuita de Altium Finanzas ya terminó.</strong>{" "}
-            Podés seguir entrando a ver tus estados, presupuesto, flujo e informes,
-            pero para seguir cargando nuevos comprobantes e históricos necesitás
-            pasar al <strong>Plan PRO</strong> (u$s 9,99/mes).
+            Podés seguir entrando a ver tus estados, presupuesto, flujo e
+            informes, pero para seguir cargando nuevos comprobantes e históricos
+            necesitás pasar al <strong>Plan PRO</strong> (u$s 9,99/mes).
             <br />
             Si te interesa, escribinos y lo coordinamos.
           </>
@@ -220,9 +226,9 @@ export default function Home() {
         </h1>
         <p style={{ fontSize: "1rem", color: "#444", maxWidth: 700 }}>
           Altium Finanzas te muestra, en segundos, si tu negocio está ganando o
-          perdiendo plata, qué gastos te están pesando y cómo podés mejorar mes a mes.
-          Pensado para emprendedores, pequeños comercios y profesionales independientes.
-          Sin planillas. Sin lenguaje de contador. En sencillo.
+          perdiendo plata, qué gastos te están pesando y cómo podés mejorar mes
+          a mes. Pensado para emprendedores, pequeños comercios y profesionales
+          independientes. Sin planillas. Sin lenguaje de contador. En sencillo.
         </p>
 
         <div
@@ -247,7 +253,8 @@ export default function Home() {
             Comenzar ahora
           </button>
           <span style={{ fontSize: "0.9rem", color: "#666" }}>
-            Funciona desde la web y la podés usar desde el celular, sin instalar nada.
+            Funciona desde la web y la podés usar desde el celular, sin instalar
+            nada.
           </span>
         </div>
       </header>
@@ -265,20 +272,20 @@ export default function Home() {
           <h2>¿Qué vas a lograr con Altium Finanzas?</h2>
           <ul style={{ paddingLeft: "1.2rem", marginTop: "0.5rem" }}>
             <li>
-              Saber si tu negocio está ganando plata o no, sin hacer cuentas
-              ni abrir planillas.
+              Saber si tu negocio está ganando plata o no, sin hacer cuentas ni
+              abrir planillas.
             </li>
             <li>
               Ver tus <strong>ingresos y gastos ordenados por rubro</strong> para
               entender dónde se va el dinero.
             </li>
             <li>
-              Mirar tu <strong>flujo de caja</strong> y anticipar si te va a faltar
-              o sobrar plata en el mes.
+              Mirar tu <strong>flujo de caja</strong> y anticipar si te va a
+              faltar o sobrar plata en el mes.
             </li>
             <li>
-              Tener un <strong>presupuesto sugerido</strong> usando tus últimos meses
-              como referencia.
+              Tener un <strong>presupuesto sugerido</strong> usando tus últimos
+              meses como referencia.
             </li>
             <li>
               Recibir un <strong>informe mensual en lenguaje simple</strong>, con
@@ -303,8 +310,8 @@ export default function Home() {
             <li>Emprendedores y pequeños comercios que quieren ordenarse.</li>
             <li>Profesionales independientes que trabajan por su cuenta.</li>
             <li>
-              Negocios que no llevan una contabilidad formal pero necesitan entender
-              si están ganando plata.
+              Negocios que no llevan una contabilidad formal pero necesitan
+              entender si están ganando plata.
             </li>
             <li>
               Personas que se cansaron de las planillas y quieren ver sus números
@@ -319,16 +326,16 @@ export default function Home() {
         <h2>¿Cómo funciona?</h2>
         <ol style={{ paddingLeft: "1.2rem", marginTop: "0.5rem" }}>
           <li>
-            Cargás fotos o PDFs de tus comprobantes, o un archivo histórico
-            en Excel/CSV con tus ventas y gastos.
+            Cargás fotos o PDFs de tus comprobantes, o un archivo histórico en
+            Excel/CSV con tus ventas y gastos.
           </li>
           <li>
-            La app lee y organiza automáticamente tus ingresos y egresos
-            por rubro y período.
+            La app lee y organiza automáticamente tus ingresos y egresos por
+            rubro y período.
           </li>
           <li>
-            Ves tus <strong>estados, presupuesto y flujo de caja</strong> ya armados,
-            sin fórmulas ni planillas.
+            Ves tus <strong>estados, presupuesto y flujo de caja</strong> ya
+            armados, sin fórmulas ni planillas.
           </li>
           <li>
             Leés un <strong>informe en lenguaje simple</strong> con los puntos
@@ -342,16 +349,16 @@ export default function Home() {
         <h2>Usá la app</h2>
         <p style={{ maxWidth: 700, color: "#444", marginBottom: "1rem" }}>
           Acá es donde cargás tu información y ves los números de tu negocio.
-          Podés volver a esta sección todas las veces que quieras, e ir
-          agregando nuevos meses y comprobantes.
+          Podés volver a esta sección todas las veces que quieras, e ir agregando
+          nuevos meses y comprobantes.
         </p>
 
         {/* Zona de subida de archivos */}
         <section style={{ marginTop: "0.5rem", marginBottom: "1.5rem" }}>
           <h3>Cargá tu información</h3>
           <p style={{ maxWidth: 700 }}>
-            Podés subir fotos o PDFs de tickets, facturas y estados de cuenta.
-            Si tenés un archivo histórico en Excel/CSV (con ventas, compras,
+            Podés subir fotos o PDFs de tickets, facturas y estados de cuenta. Si
+            tenés un archivo histórico en Excel/CSV (con ventas, compras,
             alquiler, sueldos, etc.), también podés subirlo y lo usamos para
             armar tus números.
           </p>
@@ -394,9 +401,9 @@ export default function Home() {
               maxWidth: 700,
             }}
           >
-            💡 Tip: los archivos <strong>.csv</strong> los tomamos como
-            histórico (meses anteriores). Las imágenes y PDF los leemos como
-            comprobantes individuales.
+            💡 Tip: los archivos <strong>.csv</strong> los tomamos como histórico
+            (meses anteriores). Las imágenes y PDF los leemos como comprobantes
+            individuales.
           </p>
         </section>
 
@@ -430,8 +437,7 @@ export default function Home() {
               style={{
                 padding: "0.5rem 1rem",
                 borderRadius: 4,
-                border:
-                  tab === "presupuesto" ? "2px solid black" : "1px solid #ccc",
+                border: tab === "presupuesto" ? "2px solid black" : "1px solid #ccc",
               }}
             >
               Presupuesto
@@ -464,8 +470,7 @@ export default function Home() {
               style={{
                 padding: "0.5rem 1rem",
                 borderRadius: 4,
-                border:
-                  tab === "informe" ? "2px solid black" : "1px solid #ccc",
+                border: tab === "informe" ? "2px solid black" : "1px solid #ccc",
               }}
             >
               Informe mensual
@@ -493,9 +498,9 @@ export default function Home() {
       >
         <h3>Plan PRO – u$s 9,99 / mes</h3>
         <p style={{ fontSize: "0.9rem", color: "#555" }}>
-          Pensado para dueños de pequeños negocios y profesionales
-          independientes que quieren tener sus números claros sin vivir
-          peleados con las planillas.
+          Pensado para dueños de pequeños negocios y profesionales independientes
+          que quieren tener sus números claros sin vivir peleados con las
+          planillas.
         </p>
         <ul
           style={{
@@ -512,13 +517,7 @@ export default function Home() {
           <li>Informe mensual explicado en lenguaje simple.</li>
           <li>Soporte prioritario por mail.</li>
         </ul>
-        <p
-          style={{
-            fontSize: "0.85rem",
-            color: "#666",
-            marginTop: "0.5rem",
-          }}
-        >
+        <p style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.5rem" }}>
           Después de tus <strong>60 días de prueba gratuita</strong>, vas a poder
           seguir entrando a ver tus datos sin costo. Para seguir cargando nuevos
           comprobantes e históricos, podés pasarte al <strong>Plan PRO</strong>.
@@ -541,41 +540,6 @@ export default function Home() {
           }}
         >
           Quiero pasar al Plan PRO
-        </button>
-      </div>
-
-      {/* Consultoría personalizada */}
-      <hr style={{ margin: "2rem 0" }} />
-      <div
-        style={{
-          padding: "1rem",
-          borderRadius: 8,
-          border: "1px solid #ddd",
-          backgroundColor: "#fafafa",
-        }}
-      >
-        <h3>¿Querés ayuda para entender tus números?</h3>
-        <p style={{ fontSize: "0.9rem", color: "#555" }}>
-          Si te gustaría que alguien te acompañe a mirar estos informes y armar
-          un plan para mejorar tu negocio, podés pedir una consultoría
-          personalizada de Altium Finanzas.
-        </p>
-        <button
-          style={{
-            marginTop: "0.5rem",
-            padding: "0.5rem 1rem",
-            borderRadius: 4,
-            border: "none",
-            cursor: "pointer",
-          }}
-          onClick={() => {
-            window.open(
-              "mailto:altiumfinanzas@altiumfinanzas.com?subject=Quiero%20una%20consultor%C3%ADa%20personalizada&body=Hola,%20quiero%20ayuda%20con%20los%20n%C3%BAmeros%20de%20mi%20negocio.",
-              "_blank"
-            );
-          }}
-        >
-          Pedir consultoría personalizada
         </button>
       </div>
     </main>
